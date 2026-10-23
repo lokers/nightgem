@@ -197,6 +197,7 @@ describe('orchestrator_append', () => {
     expect(out).toContain(`cat >> ${VARS.tasksJsonl} <<'EOF'`);
     expect(out).toMatch(/write tool/);
     expect(out).toMatch(/Never\*\* build a line with `echo/);
+    expect(out).toContain('Heredocs and bare `mktemp` work in runs');
   });
 
   it('keeps task ids free of push, gh and ssh, and says soft stop allows only oracle', () => {
@@ -272,6 +273,20 @@ describe('never-list and subagent appends', () => {
       expect(out).toMatch(/standalone words `push`, `gh` or `ssh`/);
       expect(out).toContain("<<'EOF'");
       expect(out).toMatch(/`echo "\.\.\."`/);
+    },
+  );
+
+  it.each(['orchestrator_append', 'fixer_append', 'designer_append', 'oracle_append'] as const)(
+    '%s states the temp-file facts and the plain-spaces line',
+    (name) => {
+      const out = render(name).replace(/\s+/g, ' ');
+      expect(out).toContain("`$TMPDIR` is the run's own writable temp dir");
+      expect(out).toContain('bare `mktemp` already uses it');
+      expect(out).toContain('`/tmp`, `/var/tmp` and other shared temp dirs are not writable');
+      expect(out).toContain("Quoted heredocs (`<<'EOF'`) work for files and JSONL");
+      expect(out).toContain('bash and `sh` need a writable cwd');
+      expect(out).toContain('retype it with plain ASCII spaces');
+      expect(out).toContain('`git commit -F <file>`');
     },
   );
 

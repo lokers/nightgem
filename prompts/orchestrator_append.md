@@ -113,7 +113,8 @@ EOF
 ```
 
 The guard treats the body of a quoted-delimiter heredoc (`<<'EOF'`) as data, so a log line may mention any text. An
-unquoted delimiter (`<<EOF`) is not data: do not use it.
+unquoted delimiter (`<<EOF`) is not data: do not use it. Heredocs and bare `mktemp` work in runs (`$TMPDIR` is the run's
+writable temp dir; `/tmp` is not).
 
 1. **Every task transition** (`todo`, `running`, `verifying`, `fixing`, `done`, `blocked`, `skipped`): append a `TaskEvent`
    line to `{{tasksJsonl}}` **and** update the board in `{{statusMd}}`. The latest line per `id` wins.
