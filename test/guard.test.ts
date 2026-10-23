@@ -113,7 +113,7 @@ describe('bypass corpus', () => {
   const corpus = loadCorpus();
 
   it('has a substantial corpus with all three verdicts', () => {
-    expect(corpus.length).toBeGreaterThan(120);
+    expect(corpus.length).toBeGreaterThan(1100);
     expect(new Set(corpus.map((l) => l.expected))).toEqual(new Set(['allow', 'block', 'rewrite']));
   });
 
@@ -123,6 +123,86 @@ describe('bypass corpus', () => {
       expect(result.verdict, JSON.stringify(result)).toBe(line.expected);
     });
   }
+});
+
+describe('bypass corpus: forms of a denied command', () => {
+  const blocked = loadCorpus()
+    .filter((l) => l.expected === 'block' && l.tool === 'shell')
+    .map((l) => l.payload);
+  // every spelling the corpus must keep blocking for a denied command (gh); a guard change may not drop one of these forms
+  const FORMS: Array<[string, RegExp]> = [
+    ['semicolon', /^echo a; gh /],
+    ['&&', /^echo a && gh /],
+    ['||', /^false \|\| gh /],
+    ['pipe', /^echo a \| gh /],
+    ['background &', /^echo a & gh /],
+    ['newline', /^echo a\\ngh /],
+    ['subshell', /^\(gh /],
+    ['brace group', /^\{ gh [^;]*; \}$/],
+    ['negation', /^! gh /],
+    ['if/then', /^if true; then gh /],
+    ['then on its own line', /\\nthen\\n\s+gh /],
+    ['do body', /^for i in 1 2; do gh /],
+    ['do on its own line', /\\ndo\\n\s+gh /],
+    ['case body', /^case x in x\) gh /],
+    ['leading assignment', /^FOO=1 \/x\/gh /],
+    ['env -i', /^env -i gh /],
+    ['env -u', /^env -u HOME gh /],
+    ['command -p', /^command -p gh /],
+    ['builtin', /^builtin gh /],
+    ['exec -a', /^exec -a x gh /],
+    ['nohup', /^nohup gh /],
+    ['time -p', /^time -p gh /],
+    ['nice -n', /^nice -n 10 gh /],
+    ['timeout -s', /^timeout -s KILL 5 gh /],
+    ['stdbuf', /^stdbuf -o0 gh /],
+    ['sudo -u', /^sudo -u root gh /],
+    ['xargs -I', /xargs -I\{\} gh /],
+    ['find -exec', /-exec gh /],
+    ['find -execdir', /-execdir gh /],
+    ['find -ok', /-ok gh /],
+    ['caffeinate', /^caffeinate -i gh /],
+    ['arch', /^arch -arm64 gh /],
+    ['script', /^script -q \/dev\/null gh /],
+    ['./gh', /^\.\/gh /],
+    ['../gh', /^\.\.\/gh /],
+    ['bin/gh', /^bin\/gh /],
+    ['double-quoted absolute path', /^"\/usr\/bin\/gh" /],
+    ['doubled slash', /^\/usr\/bin\/\/gh /],
+    ['dot segment', /^\/usr\/bin\/\.\/gh /],
+    ['tilde path', /^~\/bin\/gh /],
+    ['$HOME path', /^\$HOME\/bin\/gh /],
+    ['sh -c', /^sh -c 'gh /],
+    ['bash -c', /^bash -c 'gh /],
+    ['zsh -c', /^zsh -c 'gh /],
+    ['eval', /^eval 'gh /],
+    ['command substitution', /^echo \$\(gh /],
+    ['nested command substitution', /^echo \$\(echo \$\(gh /],
+    ['backticks', /^echo `gh /],
+    ['process substitution', /^cat <\(gh /],
+    ['here-string into a shell', /^sh <<< 'gh /],
+    ['heredoc into a shell', /^sh <<'EOF'\\ngh /],
+    ['data piped into a shell', /^echo 'gh pr list' \| sh$/],
+    ['alias', /^alias g=gh; /],
+    ['function definition', /^g\(\) \{ gh /],
+    ['cp of the binary', /^cp \/usr\/bin\/gh /],
+    ['ln of the binary', /^ln -s \/usr\/bin\/gh /],
+    ['python -c', /^python3? -c /],
+    ['node -e', /^node -e /],
+    ['perl -e', /^perl -e /],
+    ['awk system()', /^awk 'BEGIN \{ system\("gh /],
+    ['assignment then $X', /^X=\/usr\/bin\/gh; \$X /],
+    ['make variable', /^make GH=/],
+    ['git rebase -x', /^git rebase -x /],
+    ['git submodule foreach', /^git submodule foreach /],
+    ['npx -c', /^npx -c /],
+  ];
+  it.each(FORMS)('the corpus blocks the %s form', (_name, re) => {
+    expect(blocked.some((p) => re.test(p)), String(re)).toBe(true);
+  });
+  it('blocks each of them today', () => {
+    for (const p of blocked.filter((q) => /\bgh\b/.test(q))) expect(decide({ tool: 'shell', input: { command: subst(p).replace(/\\n/g, '\n') }, agent: 'fixer' }, cfg).verdict, p).toBe('block');
+  });
 });
 
 describe('secret locations', () => {

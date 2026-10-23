@@ -66,7 +66,7 @@ describe('parseCorpus', () => {
   });
   it('the shipped corpus loads, has both verdicts and covers the mandatory probes', () => {
     const corpus = loadCorpus(CORPUS_FILE.pathname, VARS);
-    expect(corpus.length).toBeGreaterThan(100);
+    expect(corpus.length).toBeGreaterThan(500);
     expect(new Set(corpus.map((p) => p.expect))).toEqual(new Set(['allow', 'deny']));
     const has = (action: string, resource: string, expectV: string) =>
       corpus.some((p) => p.action === action && p.resource === resource && p.expect === expectV);
@@ -206,7 +206,7 @@ describe('standalone corpus section: holds with the generic defaults, the worksp
     const corpus = [...loadCorpus(CORPUS_FILE.pathname, VARS), ...deriveProbes(generic, CTX)];
     const res = await preflightRules(fakeRunApi(fakeAgents(rendered(generic).configContent.permissions)), { sessionId: 's', agents: [...AGENT_IDS], corpus });
     expect(res.failures.map((f) => f.message)).toEqual([]);
-    expect(corpus.length).toBeGreaterThan(300);
+    expect(corpus.length).toBeGreaterThan(500);
   });
   it('the workspace-specific section is skipped by default and included on request; the derived probes cover the same ground', () => {
     const def = loadCorpus(CORPUS_FILE.pathname, VARS);
