@@ -4,14 +4,15 @@
 useDefault = true
 
 [[allowlists]]
-description = "Fake secrets used by the redaction and auth tests (test files only, exact values)"
+description = "Fake secrets used by the redaction, auth and remote-URL tests (test files only, exact values)"
 condition = "AND"
 paths = [
-  '''(^|/)test/(client\.contract|orchestrator|events)\.test\.ts$''',
+  '''(^|/)test/(client\.contract|orchestrator|events|remotes)\.test\.ts$''',
 ]
 regexTarget = "line"
 regexes = [
   '''pw-test-0123456789''',
   '''f00dfacecafebeef0123456789abcdef0123456789abcdef''',
   '''Authorization: Bearer abcdef1234567890''',
+  '''ghp_0123456789abcdefghijklmnopqrstuvwxyz''',
 ]
