@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { BudgetLedger, type BudgetEvent, type BudgetLedgerOptions } from '../src/budget.ts';
-import { CostLine, SessionInfo } from '../src/contracts.ts';
+import { CostLine, SessionInfo, type Phase } from '../src/contracts.ts';
 import { APPROXIMATE_RATES_USD_PER_MTOK, estimateCost, ratesFor } from '../src/pricing.ts';
 import { RECORDED_FIXTURES, REPO_ROOT } from './fixtures/paths.ts';
 
@@ -215,6 +215,228 @@ describe('BudgetLedger thresholds', () => {
     expect(() => ledger({ budgetUsd: 0 })).toThrow();
     expect(() => ledger({ softPct: 1.1, hardPct: 1 })).toThrow();
     expect(() => ledger({ costMultiplier: 0 })).toThrow();
+  });
+});
+
+function line(sessionId: string, costUsd: number, phase: Phase = 'plan', extra: Partial<CostLine> = {}): CostLine {
+  return CostLine.parse({
+    ts: '2026-10-20T10:00:00.000Z',
+    sessionId,
+    parentId: null,
+    phase,
+    costUsd,
+    estimated: false,
+    source: 'session-info',
+    totalUsd: costUsd,
+    ...extra,
+  });
+}
+
+describe('BudgetLedger budget validation', () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY])('rejects budgetUsd %s', (budgetUsd) => {
+    expect(() => ledger({ budgetUsd })).toThrow(/budgetUsd must be a finite number > 0/);
+  });
+
+  it('rejects non-finite percentages and multipliers, which would disable the stop', () => {
+    expect(() => ledger({ hardPct: Number.POSITIVE_INFINITY })).toThrow();
+    expect(() => ledger({ softPct: Number.NaN })).toThrow();
+    expect(() => ledger({ costMultiplier: Number.POSITIVE_INFINITY })).toThrow();
+    expect(() => ledger({ costMultiplier: Number.NaN })).toThrow();
+    expect(() => ledger({ costAtStartUsd: -1 })).toThrow();
+    expect(() => ledger({ costAtStartUsd: Number.NaN })).toThrow();
+  });
+});
+
+describe('BudgetLedger fresh run: attempt spend equals cumulative spend', () => {
+  it('has zero baselines and the thresholds behave as before', () => {
+    const l = ledger();
+    expect(l.baselineUsd).toBe(0);
+    l.ingestSession(session('a', 3));
+    l.ingestSession(session('b', 5.5));
+    expect(l.attemptSpendUsd).toBeCloseTo(8.5);
+    expect(l.cumulativeUsd).toBeCloseTo(8.5);
+    expect(l.check()).toBe('soft');
+  });
+
+  it('treats an empty cost.jsonl like no cost.jsonl', () => {
+    const l = ledger({ costLines: [] });
+    l.ingestSession(session('a', 9.9));
+    expect(l.attemptSpendUsd).toBe(l.cumulativeUsd);
+    expect(l.check()).toBe('soft');
+  });
+});
+
+describe('BudgetLedger resume across attempts', () => {
+  /** Attempt 1 spent $4: plan session p1 ($1) and build session b1 ($3). */
+  const attempt1 = [line('p1', 1, 'plan'), line('b1', 3, 'build', { parentId: 'p1' })];
+  const watchedResume = (over: Partial<BudgetLedgerOptions> = {}) => {
+    const l = ledger({ budgetUsd: 1, costLines: attempt1, costAtStartUsd: 4, ...over });
+    const events: BudgetEvent[] = [];
+    l.onEvent((e) => events.push(e));
+    return { l, events };
+  };
+  /** What reconcile feeds: the earlier sessions with their final costs, in database order. */
+  const ingestAttempt1 = (l: BudgetLedger) => {
+    l.ingestSession(session('p1', 1));
+    l.ingestSession(session('b1', 3, { parentID: 'p1' }));
+  };
+
+  it('counts the earlier sessions in the cumulative total only, so a small budget does not stop at once', () => {
+    const { l, events } = watchedResume();
+    ingestAttempt1(l);
+    expect(l.cumulativeUsd).toBeCloseTo(4);
+    expect(l.baselineUsd).toBeCloseTo(4);
+    expect(l.attemptSpendUsd).toBe(0);
+    expect(l.check()).toBe('ok');
+    expect(events).toEqual([]);
+  });
+
+  it('adds new attempt-2 sessions and growth of old ones, without double-counting attempt 1', () => {
+    const { l } = watchedResume({ budgetUsd: 10 });
+    ingestAttempt1(l);
+    l.ingestSession(session('b1', 3.25, { parentID: 'p1' })); // old session grows by 0.25
+    l.ingestSession(session('n1', 0.5)); // new in attempt 2
+    expect(l.cumulativeUsd).toBeCloseTo(1 + 3.25 + 0.5);
+    expect(l.attemptSpendUsd).toBeCloseTo(0.75);
+  });
+
+  it('fires soft at 85% and hard at 100% of the attempt budget, once each', () => {
+    const { l, events } = watchedResume({ budgetUsd: 1 });
+    ingestAttempt1(l);
+    expect(l.check()).toBe('ok');
+    l.ingestSession(session('n1', 0.84));
+    expect(l.check()).toBe('ok');
+    l.ingestSession(session('n1', 0.85));
+    expect(l.check()).toBe('soft');
+    expect(l.check()).toBe('soft');
+    expect(events).toEqual(['soft']);
+    l.ingestSession(session('b1', 3.15, { parentID: 'p1' })); // 0.85 + 0.15 = 1.00
+    expect(l.check()).toBe('hard');
+    expect(l.check()).toBe('hard');
+    l.ingestSession(session('n1', 5));
+    l.check();
+    expect(events).toEqual(['soft', 'hard']);
+  });
+
+  it('does not stop when the cumulative cost already passes the attempt budget', () => {
+    const { l, events } = watchedResume({ budgetUsd: 2 });
+    ingestAttempt1(l);
+    expect(l.cumulativeUsd).toBeGreaterThan(l.hardLimitUsd);
+    expect(l.check()).toBe('ok');
+    expect(events).toEqual([]);
+  });
+
+  it('applies the cost multiplier to attempt spend and baseline', () => {
+    const { l } = watchedResume({ budgetUsd: 10, costMultiplier: 2, costAtStartUsd: 8 });
+    ingestAttempt1(l);
+    l.ingestSession(session('n1', 1));
+    expect(l.baselineUsd).toBeCloseTo(8);
+    expect(l.cumulativeUsd).toBeCloseTo(10);
+    expect(l.attemptSpendUsd).toBeCloseTo(2);
+  });
+
+  it('ignores a session whose cost went down (stale snapshot) instead of subtracting it', () => {
+    const { l } = watchedResume({ budgetUsd: 10 });
+    ingestAttempt1(l);
+    l.ingestSession(session('b1', 2, { parentID: 'p1' })); // below its baseline of 3
+    l.ingestSession(session('n1', 0.5));
+    expect(l.attemptSpendUsd).toBeCloseTo(0.5);
+  });
+
+  it('in tree mode only counts attributed sessions, baselines included', () => {
+    const l = ledger({ attribution: 'tree', rootSessionIds: ['p1'], budgetUsd: 10, costLines: attempt1, costAtStartUsd: 4 });
+    ingestAttempt1(l);
+    l.ingestSession(session('stranger', 50));
+    l.ingestSession(session('n1', 1, { parentID: 'b1' }));
+    expect(l.cumulativeUsd).toBeCloseTo(5);
+    expect(l.attemptSpendUsd).toBeCloseTo(1);
+  });
+
+  it('keeps old sessions in their phase and emits no duplicate cost lines for unchanged sessions', () => {
+    const { l } = watchedResume({ budgetUsd: 10 });
+    ingestAttempt1(l);
+    // the orchestrator of attempt 2 is in the build phase and knows nothing about the old sessions
+    expect(l.toCostLines(() => 'build')).toEqual([]);
+    const byPhase = l.perPhase(() => 'build');
+    expect(byPhase.plan.costUsd).toBe(1);
+    expect(byPhase.build.costUsd).toBe(3);
+    expect(l.perPhase().plan.costUsd).toBe(1);
+
+    l.ingestSession(session('p1', 1.5)); // old plan session grows
+    l.ingestSession(session('n1', 0.5));
+    const lines = l.toCostLines(() => 'report');
+    expect(lines.map((x) => [x.sessionId, x.phase, x.costUsd])).toEqual([
+      ['p1', 'plan', 1.5],
+      ['n1', 'report', 0.5],
+    ]);
+    // running total continues from the earlier lines (1.5 + 3 + 0.5), not from zero
+    expect(lines[1]?.totalUsd).toBeCloseTo(5);
+    expect(l.toCostLines(() => 'report')).toEqual([]);
+    const after = l.perPhase(() => 'report');
+    expect(after.plan.costUsd).toBe(1.5);
+    expect(after.build.costUsd).toBe(3);
+    expect(after.report.costUsd).toBe(0.5);
+  });
+
+  it('uses the latest cost.jsonl line per session as baseline and emitted value', () => {
+    const lines = [line('a', 1), line('b', 2, 'build'), line('a', 1.5), line('a', 2, 'plan', { totalUsd: 4 })];
+    const l = ledger({ budgetUsd: 10, costLines: lines, costAtStartUsd: 4 });
+    expect(l.baselineUsd).toBeCloseTo(4);
+    l.ingestSession(session('a', 2));
+    l.ingestSession(session('b', 2));
+    expect(l.attemptSpendUsd).toBe(0);
+    expect(l.toCostLines(() => 'build')).toEqual([]);
+  });
+
+  it('keeps the estimated flag of an emitted line, so an estimate that becomes a real cost is re-emitted', () => {
+    const l = ledger({ budgetUsd: 10, costLines: [line('a', 0.4, 'plan', { estimated: true, source: 'estimate' })] });
+    l.ingestSession(session('a', 0.4));
+    expect(l.toCostLines(() => 'plan')).toHaveLength(1);
+  });
+});
+
+describe('BudgetLedger crash mid-attempt (cost.jsonl lags behind the database)', () => {
+  it('over-counts by at most the lag of the lagging session, never under-counts', () => {
+    // At crash time the database knew b1 at $3.6 and p1 at $1, but cost.jsonl only got b1 up to $3.
+    const lagging = [line('p1', 1), line('b1', 3, 'build')];
+    const l = ledger({ budgetUsd: 10, costLines: lagging, costAtStartUsd: 4 });
+    l.ingestSession(session('p1', 1));
+    l.ingestSession(session('b1', 3.6)); // true attempt-1 cost, 0.6 not yet in cost.jsonl
+    l.ingestSession(session('n1', 0.4)); // real attempt-2 spend
+    const trueAttempt2 = 0.4;
+    const lag = 0.6;
+    expect(l.attemptSpendUsd).toBeGreaterThanOrEqual(trueAttempt2);
+    expect(l.attemptSpendUsd).toBeLessThanOrEqual(trueAttempt2 + lag + 1e-9);
+    expect(l.attemptSpendUsd).toBeCloseTo(1.0);
+    expect(l.cumulativeUsd).toBeCloseTo(5.0);
+  });
+
+  it('a lag can trip a stop earlier than strictly necessary, which is the safe side', () => {
+    const l = ledger({ budgetUsd: 1, costLines: [line('b1', 3, 'build')], costAtStartUsd: 3.9 });
+    const events: BudgetEvent[] = [];
+    l.onEvent((e) => events.push(e));
+    l.ingestSession(session('b1', 3.9));
+    // the true attempt-2 spend is 0, but the 0.9 of lag is counted: 0.9 >= soft (0.85)
+    expect(l.attemptSpendUsd).toBeCloseTo(0.9);
+    expect(l.check()).toBe('soft');
+    expect(events).toEqual(['soft']);
+  });
+
+  it('a session missing from cost.jsonl counts in full', () => {
+    const l = ledger({ budgetUsd: 10, costLines: [line('p1', 1)], costAtStartUsd: 1 });
+    l.ingestSession(session('p1', 1));
+    l.ingestSession(session('lost', 2)); // existed before the crash, never made it into cost.jsonl
+    expect(l.attemptSpendUsd).toBeCloseTo(2);
+  });
+
+  it('a restart inside the same attempt cannot hide its spend (costAtStartUsd floor)', () => {
+    // fresh run, attempt 1 started with 0; the orchestrator restarted after cost.jsonl already caught up to $9
+    const l = ledger({ budgetUsd: 10, costLines: [line('a', 9)], costAtStartUsd: 0 });
+    l.ingestSession(session('a', 9));
+    expect(l.attemptSpendUsd).toBeCloseTo(9);
+    expect(l.check()).toBe('soft');
+    l.ingestSession(session('a', 10));
+    expect(l.check()).toBe('hard');
   });
 });
 

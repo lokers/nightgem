@@ -15,7 +15,7 @@ import { APP, ENV_PREFIX, TMP_PREFIX } from './brand.ts';
 import { realExec, type CliDeps, type DoctorCheck, type ExecFn } from './cli-deps.ts';
 import { BudgetLedger } from './budget.ts';
 import { isRunApiError, type RunClient } from './client.ts';
-import { parseModelRef, RepoEntry, RunContextSnapshot, type RunManifest, type SafetyInputs } from './contracts.ts';
+import { attemptsOf, CostLine, parseModelRef, RepoEntry, RunContextSnapshot, type RunManifest, type SafetyInputs } from './contracts.ts';
 import { createEventPump, realClock } from './events.ts';
 import { currentBranch, defaultGit, headSha, type GitRunner } from './gitinfo.ts';
 import { runGitSafe } from './gitsafe.ts';
@@ -44,6 +44,7 @@ import {
   readControlFlags,
   readLockInfo,
   releaseLock,
+  readJsonl,
   readManifest,
   writeManifest,
   StateError,
@@ -1331,8 +1332,16 @@ export function realOrchestratorDeps(slug: string, home: string = homedir(), opt
   const slimVersion = detectSlim({ home, fs }).version;
   const opencodeBin = env[`${ENV_PREFIX}OPENCODE_BIN`] ?? resolveBin('opencode', env.PATH, ['/opt/homebrew/bin/opencode']) ?? '/opt/homebrew/bin/opencode';
 
+  // Re-hydrate across attempts. The run's database already holds every earlier attempt's sessions (cumulative cost);
+  // cost.jsonl gives each session's cost at attempt start, so only growth since then counts against this attempt's
+  // budget. A missing file reads as empty (fresh run). Malformed lines are skipped, which only lowers a baseline: safe.
+  // The current attempt's costAtStartUsd floors the attempt spend, so a restart inside one attempt cannot hide spend.
+  const priorCost = readJsonl(paths.costJsonl, CostLine).items;
+  const currentAttempt = attemptsOf(manifest).at(-1);
   const ledger = new BudgetLedger({
     budgetUsd: manifest.budgetUsd,
+    costLines: priorCost,
+    ...(currentAttempt ? { costAtStartUsd: currentAttempt.costAtStartUsd } : {}),
     softPct: manifest.softPct,
     hardPct: manifest.hardPct,
     costMultiplier: manifest.costMultiplier,

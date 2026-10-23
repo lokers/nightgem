@@ -7,6 +7,15 @@
  *   and compaction); the latest ingested value wins, so ingesting is idempotent.
  * - When a session reports cost 0 but has tokens, a price-table estimate is used and the
  *   session is marked estimated.
+ * - Cumulative vs attempt spend. A run can be resumed, and each attempt has its own budget. The ledger total over
+ *   every session in the run's database is the *cumulative* cost (never under-counts: the database survives across
+ *   attempts). The *attempt spend* is what the soft and hard thresholds compare with `budgetUsd`: per session,
+ *   `max(0, current - baseline)` where the baseline is the session's latest `cost.jsonl` line at construction
+ *   (`costLines`), plus the whole cost of any session new in this attempt. With no `cost.jsonl` every baseline is 0 and
+ *   attempt spend equals cumulative spend. If `cost.jsonl` lags behind the database after a crash the baselines are
+ *   too low, so the attempt spend over-counts: the safe direction. As a second floor, when `costAtStartUsd` is given
+ *   (the cumulative cost recorded when the attempt began) the attempt spend is never below `cumulative - costAtStart`,
+ *   so a restart inside the same attempt, whose own lines are already in `cost.jsonl`, cannot hide that attempt's spend.
  * - Attribution: `isolated-db` (default; the run has its own XDG_DATA_HOME so every session is
  *   ours) or `tree` (only sessions whose `parentID` chain reaches a root session count; a child
  *   seen before its parent stays pending and is resolved lazily once the parent arrives).
@@ -33,6 +42,17 @@ export interface BudgetLedgerOptions {
   attribution?: AttributionMode;
   /** Clock for `cost.jsonl` timestamps. */
   now?: () => Date;
+  /**
+   * The existing `cost.jsonl` lines (file order; the latest line per session wins). They seed the per-session baselines
+   * (attempt spend), the already-emitted state (no duplicate lines) and the per-session phases (old sessions keep their
+   * phase). Omit on a fresh run.
+   */
+  costLines?: readonly CostLine[];
+  /**
+   * The cumulative effective cost (already multiplied) recorded when this attempt began. Floors the attempt spend at
+   * `cumulative - costAtStartUsd`. Defaults to 0 (no floor beyond the per-session measure).
+   */
+  costAtStartUsd?: number;
 }
 
 export interface BudgetTotals {
@@ -80,17 +100,38 @@ export class BudgetLedger {
   private readonly sessions = new Map<string, SessionRecord>();
   private readonly emitted = new Map<string, EmittedRecord>();
   private readonly phases = new Map<string, Phase>();
+  /** Phases of sessions that already had a `cost.jsonl` line at construction. They never change. */
+  private readonly seededPhases = new Map<string, Phase>();
+  /** Raw cost of each session at the start of this attempt (latest `cost.jsonl` line). */
+  private readonly baselines = new Map<string, number>();
+  private readonly costAtStartUsd: number;
   private readonly listeners = new Set<(event: BudgetEvent) => void>();
   private readonly fired = new Set<BudgetEvent>();
   private level: BudgetLevel = 'ok';
   private readonly now: () => Date;
 
   constructor(opts: BudgetLedgerOptions) {
-    if (!(opts.budgetUsd > 0)) throw new Error(`budgetUsd must be > 0 (got ${opts.budgetUsd})`);
-    if (!(opts.softPct > 0) || !(opts.hardPct > 0) || opts.softPct > opts.hardPct) {
-      throw new Error(`Need 0 < softPct <= hardPct (got ${opts.softPct}, ${opts.hardPct})`);
+    // `x > 0` is false for NaN, but true for Infinity: an infinite budget or percentage would disable the hard stop.
+    if (!Number.isFinite(opts.budgetUsd) || !(opts.budgetUsd > 0)) {
+      throw new Error(`budgetUsd must be a finite number > 0 (got ${opts.budgetUsd})`);
     }
-    if (!(opts.costMultiplier > 0)) throw new Error(`costMultiplier must be > 0 (got ${opts.costMultiplier})`);
+    if (
+      !Number.isFinite(opts.softPct) ||
+      !Number.isFinite(opts.hardPct) ||
+      !(opts.softPct > 0) ||
+      !(opts.hardPct > 0) ||
+      opts.softPct > opts.hardPct
+    ) {
+      throw new Error(`Need finite 0 < softPct <= hardPct (got ${opts.softPct}, ${opts.hardPct})`);
+    }
+    if (!Number.isFinite(opts.costMultiplier) || !(opts.costMultiplier > 0)) {
+      throw new Error(`costMultiplier must be a finite number > 0 (got ${opts.costMultiplier})`);
+    }
+    const costAtStart = opts.costAtStartUsd ?? 0;
+    if (!Number.isFinite(costAtStart) || costAtStart < 0) {
+      throw new Error(`costAtStartUsd must be a finite number >= 0 (got ${costAtStart})`);
+    }
+    this.costAtStartUsd = costAtStart;
     this.budgetUsd = opts.budgetUsd;
     this.softPct = opts.softPct;
     this.hardPct = opts.hardPct;
@@ -98,6 +139,13 @@ export class BudgetLedger {
     this.attribution = opts.attribution ?? 'isolated-db';
     this.now = opts.now ?? (() => new Date());
     for (const id of opts.rootSessionIds ?? []) this.roots.add(id);
+    for (const line of opts.costLines ?? []) {
+      // file order: the latest line per session wins
+      this.baselines.set(line.sessionId, line.costUsd);
+      this.emitted.set(line.sessionId, { valueUsd: line.costUsd, estimated: line.estimated });
+      this.phases.set(line.sessionId, line.phase);
+      this.seededPhases.set(line.sessionId, line.phase);
+    }
   }
 
   // --- ingest ---------------------------------------------------------------
@@ -192,8 +240,31 @@ export class BudgetLedger {
     return { costUsd, estimatedUsd, effectiveUsd: (costUsd + estimatedUsd) * this.costMultiplier };
   }
 
+  /** Cumulative totals over every counted session in the run's database, across all attempts. */
   total(): BudgetTotals {
     return this.totalsOf(this.countedRecords());
+  }
+
+  /** Cumulative effective cost of the run (all attempts). The source of truth; never under-counts. */
+  get cumulativeUsd(): number {
+    return this.total().effectiveUsd;
+  }
+
+  /** Effective cost already recorded in `cost.jsonl` when this ledger was built (the sum of the session baselines). */
+  get baselineUsd(): number {
+    let raw = 0;
+    for (const v of this.baselines.values()) raw += v;
+    return raw * this.costMultiplier;
+  }
+
+  /**
+   * Effective spend of this attempt: the sum over counted sessions of `max(0, current - baseline)` (a session new in
+   * this attempt has baseline 0), floored at `cumulative - costAtStartUsd`. This is what the thresholds use.
+   */
+  get attemptSpendUsd(): number {
+    let raw = 0;
+    for (const r of this.countedRecords()) raw += Math.max(0, r.valueUsd - (this.baselines.get(r.id) ?? 0));
+    return Math.max(raw * this.costMultiplier, this.cumulativeUsd - this.costAtStartUsd);
   }
 
   /**
@@ -203,7 +274,7 @@ export class BudgetLedger {
   perPhase(phaseOf?: (sessionId: string) => Phase): PhaseTotals {
     const groups = new Map<Phase | 'unassigned', SessionRecord[]>();
     for (const rec of this.countedRecords()) {
-      const phase = phaseOf ? phaseOf(rec.id) : (this.phases.get(rec.id) ?? 'unassigned');
+      const phase = this.seededPhases.get(rec.id) ?? (phaseOf ? phaseOf(rec.id) : (this.phases.get(rec.id) ?? 'unassigned'));
       const list = groups.get(phase) ?? [];
       list.push(rec);
       groups.set(phase, list);
@@ -216,6 +287,7 @@ export class BudgetLedger {
 
   // --- thresholds -----------------------------------------------------------
 
+  /** `budgetUsd` is the current attempt's budget; the limits below apply to the attempt spend. */
   get softLimitUsd(): number {
     return this.budgetUsd * this.softPct;
   }
@@ -237,12 +309,12 @@ export class BudgetLedger {
   }
 
   /**
-   * Evaluate the thresholds. Each of `soft` and `hard` is emitted at most once, `soft` first
+   * Evaluate the thresholds against the attempt spend (see `attemptSpendUsd`). Each of `soft` and `hard` is emitted at most once, `soft` first
    * (a jump straight past hard emits both). The returned level is sticky: once reached it is
    * not revoked even if a later snapshot lowers the total.
    */
   check(): BudgetLevel {
-    const effective = this.total().effectiveUsd;
+    const effective = this.attemptSpendUsd;
     let now: BudgetLevel = 'ok';
     if (effective >= this.hardLimitUsd) now = 'hard';
     else if (effective >= this.softLimitUsd) now = 'soft';
@@ -270,7 +342,7 @@ export class BudgetLedger {
       const last = this.emitted.get(rec.id);
       if (last && last.valueUsd === rec.valueUsd && last.estimated === rec.estimated) continue;
       runningRaw += rec.valueUsd - (last?.valueUsd ?? 0);
-      const phase = phaseOf(rec.id);
+      const phase = this.seededPhases.get(rec.id) ?? phaseOf(rec.id);
       this.phases.set(rec.id, phase);
       this.emitted.set(rec.id, { valueUsd: rec.valueUsd, estimated: rec.estimated });
       lines.push({
