@@ -641,3 +641,118 @@ describe('missing or empty artifacts', () => {
     expect(await readFile(paths.reportMd, 'utf8')).toContain('# Run report');
   });
 });
+
+// --- resumed run (several attempts) -------------------------------------------
+
+describe('buildReport: resumed run', () => {
+  const resumedRepos = (): Record<string, FakeRepo> => ({
+    [ACME_API]: { head: 'a'.repeat(40), branch: 'master', status: '', stash: ['s'], remote: [] },
+    '/fake/acme-api/.worktrees/budget-run/api': { log: { master: ['5555555 feat: Add endpoint'] } },
+  });
+  const resumed = (): Promise<string> => buildReport({ paths: fixture('resumed'), git: fakeGit(resumedRepos()) });
+  const abortedRepos = (): Record<string, FakeRepo> => ({
+    [ACME_API]: { head: 'a'.repeat(40), branch: 'master', status: '', stash: ['s'], remote: [] },
+    '/fake/acme-api/.worktrees/budget-run/api': { log: { master: [] } },
+    '/fake/acme-api/.worktrees/budget-run/docs': { log: { master: ['5555555 wip: docs'] } },
+    '/fake/acme-api/.worktrees/budget-run/metrics': { log: { master: [] } },
+  });
+  const golden = async (name: string): Promise<string> =>
+    (await readFile(join(FIXTURES, `${name}.report.golden.md`), 'utf8')).replaceAll('{{FIXTURES}}', FIXTURES.replace(/\/$/, ''));
+
+  it('single-attempt reports are byte-identical to the pre-resume format', async () => {
+    const completed = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
+    expect(completed).toBe(await golden('completed'));
+    const aborted = await buildReport({ paths: fixture('aborted'), git: fakeGit(abortedRepos()) });
+    expect(aborted).toBe(await golden('aborted'));
+  });
+
+  it('a manifest with a single explicit attempt renders like one without attempts', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'completed'), d, { recursive: true });
+    const run = JSON.parse(await readFile(join(d, 'RUN.json'), 'utf8')) as Record<string, unknown>;
+    run.attempts = [
+      {
+        n: 1,
+        startedAt: '2026-10-21T20:05:00.000Z',
+        endedAt: '2026-10-21T22:35:30.000Z',
+        state: 'completed',
+        stopReason: 'run.complete',
+        budgetUsd: 20,
+        costAtStartUsd: 0,
+        costUsd: 8.5,
+      },
+    ];
+    await writeFile(join(d, 'RUN.json'), JSON.stringify(run));
+    const md = await buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) });
+    expect(md).not.toContain('### Attempts');
+    expect(md).not.toContain('Resumed');
+    expect(md.replaceAll(d, FIXTURES + 'completed')).toBe(await golden('completed'));
+  });
+
+  it('the Run section says Resumed and has an Attempts table, one row per attempt', async () => {
+    const md = await resumed();
+    expect(md).toContain('- Resumed (2 attempts)');
+    expect(md).toContain('- Started: 2026-10-21T20:05:00.000Z');
+    expect(md).toContain('- Ended: 2026-10-22T10:30:00.000Z');
+    expect(md).toContain('- Duration: 2h 15m 0s (sum of attempts)');
+    expect(md).toContain('### Attempts');
+    expect(md).toContain('| n | Started | Ended | State | Stop reason | Budget | Attempt spend |');
+    expect(md).toContain(
+      '| 1 | 2026-10-21T20:05:00.000Z | 2026-10-21T20:50:00.000Z | aborted-budget | hard stop at 105% of budget | $1.0000 | $1.0500 |',
+    );
+    expect(md).toContain(
+      '| 2 | 2026-10-22T09:00:00.000Z | 2026-10-22T10:30:00.000Z | completed | run.complete | $5.0000 | $2.5000 |',
+    );
+    expect(md).toContain('Cumulative cost over all attempts: **$3.5500**.');
+    expect(sections(md)[0]).toBe('Run');
+  });
+
+  it('cost section: the percentage is attempt spend over the attempt budget; the total stays cumulative', async () => {
+    const md = await resumed();
+    expect(md).toContain('- Total (all attempts): **$3.5500**');
+    expect(md).toContain('- Budget (attempt 2): $5.0000, attempt spend $2.5000 (50.0% used)');
+    expect(md).not.toContain('% used)\n- Budget');
+    expect(md).not.toContain('71.0% used'); // cumulative / attempt budget would be wrong
+  });
+
+  it('links the renamed earlier review files under the final review, in attempt order', async () => {
+    const md = await resumed();
+    const lines = md.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('- Final review: '));
+    expect(i).toBeGreaterThan(-1);
+    const dir = join(FIXTURES, 'resumed');
+    expect(lines[i + 1]).toBe(
+      `- Earlier reviews: [FINAL_REVIEW-attempt1.md](${join(dir, 'FINAL_REVIEW-attempt1.md')}), [run-complete-attempt1.json](${join(dir, 'run-complete-attempt1.json')})`,
+    );
+  });
+
+  it('falls back to cumulative minus the cost at attempt start when the last attempt has no recorded spend', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'resumed'), d, { recursive: true });
+    const run = JSON.parse(await readFile(join(d, 'RUN.json'), 'utf8')) as { attempts: Array<Record<string, unknown>> };
+    delete run.attempts[1]?.costUsd;
+    delete run.attempts[0]?.costUsd;
+    await writeFile(join(d, 'RUN.json'), JSON.stringify(run));
+    const md = await buildReport({ paths: pathsFor(d), git: fakeGit(resumedRepos()) });
+    expect(md).toContain('| $1.0000 | unknown |'); // attempt 1: no figure recorded
+    expect(md).toContain('| $5.0000 | $2.5000 |'); // attempt 2: 3.55 - 1.05
+    expect(md).toContain('attempt spend $2.5000 (50.0% used)');
+  });
+
+  it('shows an open attempt and is deterministic', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'resumed'), d, { recursive: true });
+    const run = JSON.parse(await readFile(join(d, 'RUN.json'), 'utf8')) as Record<string, unknown> & {
+      attempts: Array<Record<string, unknown>>;
+    };
+    delete run.endedAt;
+    delete run.attempts[1]?.endedAt;
+    delete run.attempts[1]?.state;
+    await writeFile(join(d, 'RUN.json'), JSON.stringify(run));
+    const a = await buildReport({ paths: pathsFor(d), git: fakeGit(resumedRepos()) });
+    const b = await buildReport({ paths: pathsFor(d), git: fakeGit(resumedRepos()) });
+    expect(a).toBe(b);
+    expect(a).toContain('| (not ended) | - |');
+    expect(a).toContain('- Duration: unknown (an attempt has no end time)');
+  });
+});

@@ -1,0 +1,2 @@
+{"ts":"2026-10-22T09:00:00.000Z","id":"phase:build","repo":"_run","branch":"-","worktree":"-","state":"running","attempt":0,"phase":"build"}
+{"ts":"2026-10-22T09:50:00.000Z","id":"api","repo":"acme-api","branch":"feat/api-endpoint","worktree":"/fake/acme-api/.worktrees/budget-run/api","state":"done","attempt":1,"verify":[{"cmd":"go test ./...","exit":0}],"phase":"build"}

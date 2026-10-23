@@ -1,0 +1,4 @@
+{"ts":"2026-10-21T20:45:00.000Z","sessionId":"ses_plan","parentId":null,"phase":"plan","costUsd":0.25,"estimated":false,"source":"session-info","totalUsd":0.25}
+{"ts":"2026-10-21T20:48:00.000Z","sessionId":"ses_build","parentId":null,"phase":"build","costUsd":0.8,"estimated":false,"source":"session-info","totalUsd":1.05}
+{"ts":"2026-10-22T10:00:00.000Z","sessionId":"ses_build","parentId":null,"phase":"build","costUsd":2.3,"estimated":false,"source":"session-info","totalUsd":2.55}
+{"ts":"2026-10-22T10:20:00.000Z","sessionId":"ses_review","parentId":null,"phase":"review","costUsd":1.0,"estimated":false,"source":"session-info","totalUsd":3.55}

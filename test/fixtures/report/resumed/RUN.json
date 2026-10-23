@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 2,
+  "workspaceRoot": "/fake",
+  "slug": "budget-run",
+  "budgetUsd": 5,
+  "state": "completed",
+  "phase": "report",
+  "launchdLabel": "dev.nightgem.budget-run",
+  "controlDir": "/fake/control/budget-run",
+  "runDir": "/fake/specs/budget-run/.run",
+  "xdgDataHome": "/fake/control/budget-run/xdg-data",
+  "model": "anthropic/claude-sonnet-5-5",
+  "costUsd": 3.55,
+  "costEstimatedUsd": 0,
+  "repos": [
+    {
+      "name": "acme-api",
+      "path": "/fake/acme-api",
+      "defaultBranch": "master",
+      "baseline": {
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch": "master",
+        "porcelainHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stashCount": 1
+      }
+    }
+  ],
+  "worktrees": [
+    {
+      "repo": "acme-api",
+      "path": "/fake/acme-api/.worktrees/budget-run/api",
+      "branch": "feat/api-endpoint",
+      "task": "api",
+      "kind": "task"
+    }
+  ],
+  "createdAt": "2026-10-21T20:00:00.000Z",
+  "startedAt": "2026-10-21T20:05:00.000Z",
+  "endedAt": "2026-10-22T10:30:00.000Z",
+  "stopReason": "run.complete",
+  "defects": [],
+  "attempts": [
+    {
+      "n": 1,
+      "startedAt": "2026-10-21T20:05:00.000Z",
+      "endedAt": "2026-10-21T20:50:00.000Z",
+      "state": "aborted-budget",
+      "stopReason": "hard stop at 105% of budget",
+      "budgetUsd": 1,
+      "costAtStartUsd": 0,
+      "costUsd": 1.05
+    },
+    {
+      "n": 2,
+      "startedAt": "2026-10-22T09:00:00.000Z",
+      "endedAt": "2026-10-22T10:30:00.000Z",
+      "state": "completed",
+      "stopReason": "run.complete",
+      "budgetUsd": 5,
+      "costAtStartUsd": 1.05,
+      "costUsd": 2.5
+    }
+  ]
+}

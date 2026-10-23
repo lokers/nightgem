@@ -5,7 +5,7 @@
  * the existing REPORT.md (only its `## Narrative` section is carried over). It tolerates missing
  * or empty files and never throws on git failures: those render as "unknown" plus a note.
  */
-import { access, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { ZodError, type z } from 'zod';
@@ -16,10 +16,12 @@ import {
   ManifestUpgradeError,
   RunManifest,
   TaskEvent,
+  attemptsOf,
   parseRunManifest,
   type CostLine as CostLineT,
   type Decision as DecisionT,
   type RepoEntry,
+  type RunAttempt,
   type TaskEvent as TaskEventT,
 } from './contracts.ts';
 import {
@@ -135,6 +137,30 @@ export function extractNarrative(markdown: string | null): string | null {
   return text.length === 0 || text === NARRATIVE_PLACEHOLDER ? null : text;
 }
 
+/**
+ * `FINAL_REVIEW-attempt<n>.md` (specs dir) and `run-complete-attempt<n>.json` (run dir): the review markers a resume
+ * renames before the next attempt starts. Sorted by attempt, then collision suffix, then name.
+ */
+async function readEarlierReviews(specsDir: string, runDir: string): Promise<EarlierReview[]> {
+  const found: Array<EarlierReview & { n: number; k: number }> = [];
+  const scan = async (dir: string, re: RegExp): Promise<void> => {
+    let names: string[];
+    try {
+      names = await readdir(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const m = re.exec(name);
+      if (m) found.push({ name, path: join(dir, name), n: Number(m[1]), k: Number(m[2] ?? 0) });
+    }
+  };
+  await scan(specsDir, /^FINAL_REVIEW-attempt(\d+)(?:-(\d+))?\.md$/);
+  await scan(runDir, /^run-complete-attempt(\d+)(?:-(\d+))?\.json$/);
+  found.sort((a, b) => a.n - b.n || a.k - b.k || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  return found.map(({ name, path }) => ({ name, path }));
+}
+
 // ---------------------------------------------------------------------------
 // Formatting helpers
 // ---------------------------------------------------------------------------
@@ -192,6 +218,8 @@ interface Ctx {
   integrations: Map<string, TaskEventT>; // repo name -> latest integration event
   phaseEvents: TaskEventT[]; // every `phase:<name>` marker event, in file order
   finalReviewPath: string | null; // set when <specsDir>/FINAL_REVIEW.md exists
+  /** Review files renamed with an `-attempt<n>` suffix by a resume, in attempt order. */
+  earlierReviews: EarlierReview[];
   decisions: DecisionT[];
   costs: CostLineT[];
   git: GitRunner;
@@ -200,11 +228,45 @@ interface Ctx {
   pushChecks: PushCheck[];
 }
 
+interface EarlierReview {
+  name: string;
+  path: string;
+}
+
 interface PushCheck {
   repo: string;
   branch: string;
   state: RemoteBranchState | 'no-repo';
   reason?: string;
+}
+
+/** Sum of the attempts' own durations (the gaps between a stop and a resume are not run time). */
+function attemptsDuration(attempts: readonly RunAttempt[]): string {
+  let total = 0;
+  for (const a of attempts) {
+    if (!a.endedAt) return 'unknown (an attempt has no end time)';
+    total += Date.parse(a.endedAt) - Date.parse(a.startedAt);
+  }
+  return `${formatDuration(total)} (sum of attempts)`;
+}
+
+/** Attempt spend of the last attempt: its recorded figure, else the cumulative cost minus the cost at its start. */
+function attemptSpend(m: RunManifest, a: RunAttempt, isLast: boolean): number | null {
+  if (a.costUsd !== undefined) return a.costUsd;
+  return isLast ? Math.max(0, m.costUsd - a.costAtStartUsd) : null;
+}
+
+function attemptsTable(m: RunManifest): string[] {
+  const attempts = attemptsOf(m);
+  const out = ['', '### Attempts', '', '| n | Started | Ended | State | Stop reason | Budget | Attempt spend |', '| --- | --- | --- | --- | --- | --- | --- |'];
+  attempts.forEach((a, i) => {
+    const spend = attemptSpend(m, a, i === attempts.length - 1);
+    out.push(
+      `| ${a.n} | ${cell(a.startedAt)} | ${cell(a.endedAt ?? '(not ended)')} | ${a.state ?? '-'} | ${cell(a.stopReason ?? '-')} | ${usd(a.budgetUsd)} | ${spend === null ? 'unknown' : usd(spend)} |`,
+    );
+  });
+  out.push('', `Cumulative cost over all attempts: **${usd(m.costUsd)}**.`);
+  return out;
 }
 
 function headerSection(ctx: Ctx, problem: string | undefined, skipped: number): string[] {
@@ -215,20 +277,28 @@ function headerSection(ctx: Ctx, problem: string | undefined, skipped: number): 
     out.push(`- Slug: unknown`, `- Final state: unknown`);
     if (problem) out.push(`- ⚠ ${problem}`);
   } else {
-    const start = m.startedAt ?? m.createdAt;
+    const attempts = attemptsOf(m);
+    const resumed = attempts.length > 1;
+    const start = (resumed ? attempts[0]?.startedAt : undefined) ?? m.startedAt ?? m.createdAt;
     const startMs = Date.parse(start);
     const endMs = m.endedAt ? Date.parse(m.endedAt) : NaN;
     out.push('## Run', '');
     out.push(`- Slug: ${code(m.slug)}`);
     out.push(`- Final state: **${m.state}** (phase: ${m.phase})`);
     out.push(`- Stop reason: ${m.stopReason ?? '(none recorded)'}`);
+    if (resumed) out.push(`- Resumed (${attempts.length} attempts)`);
     out.push(`- Started: ${start}`);
     out.push(`- Ended: ${m.endedAt ?? '(not ended)'}`);
-    out.push(`- Duration: ${m.endedAt ? formatDuration(endMs - startMs) : 'unknown (run has no end time)'}`);
+    if (resumed) out.push(`- Duration: ${attemptsDuration(attempts)}`);
+    else out.push(`- Duration: ${m.endedAt ? formatDuration(endMs - startMs) : 'unknown (run has no end time)'}`);
     out.push(`- Model: ${code(m.model)}`);
   }
   if (ctx.finalReviewPath) out.push(`- Final review: [${FINAL_REVIEW_FILE}](${ctx.finalReviewPath})`);
+  if (ctx.earlierReviews.length > 0) {
+    out.push(`- Earlier reviews: ${ctx.earlierReviews.map((r) => `[${r.name}](${r.path})`).join(', ')}`);
+  }
   if (skipped > 0) out.push(`- ⚠ ${skipped} malformed artifact line(s) were skipped`);
+  if (ctx.manifest && attemptsOf(ctx.manifest).length > 1) out.push(...attemptsTable(ctx.manifest));
   if (ctx.phaseEvents.length > 0) {
     out.push('', '### Phases', '', '| Time | Phase | State |', '| --- | --- | --- |');
     for (const e of ctx.phaseEvents) out.push(`| ${cell(e.ts)} | ${cell(e.id.slice(PHASE_PREFIX.length))} | ${e.state} |`);
@@ -255,9 +325,16 @@ function costSection(ctx: Ctx): string[] {
   const estimated = m ? m.costEstimatedUsd : ledgerEstimated;
 
   const out: string[] = ['## Cost', ''];
-  out.push(`- Total: **${usd(total)}**`);
+  const attempts = m ? attemptsOf(m) : [];
+  const last = attempts.at(-1);
+  out.push(attempts.length > 1 ? `- Total (all attempts): **${usd(total)}**` : `- Total: **${usd(total)}**`);
   out.push(`- Estimated portion: ${usd(estimated)}`);
-  if (m) {
+  if (m && last && attempts.length > 1) {
+    // The budget is per attempt: the percentage is this (last) attempt's spend over its own budget.
+    const spend = attemptSpend(m, last, true) ?? 0;
+    out.push(`- Budget (attempt ${last.n}): ${usd(last.budgetUsd)}, attempt spend ${usd(spend)} (${((spend / last.budgetUsd) * 100).toFixed(1)}% used)`);
+    if (m.costMultiplier !== 1) out.push(`- ⚠ Cost multiplier ${m.costMultiplier} was applied (smoke test)`);
+  } else if (m) {
     const pct = (total / m.budgetUsd) * 100;
     out.push(`- Budget: ${usd(m.budgetUsd)} (${pct.toFixed(1)}% used)`);
     if (m.costMultiplier !== 1) out.push(`- ⚠ Cost multiplier ${m.costMultiplier} was applied (smoke test)`);
@@ -599,6 +676,7 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
     integrations,
     phaseEvents,
     finalReviewPath,
+    earlierReviews: await readEarlierReviews(paths.specsDir, paths.runDir),
     decisions: latestBy(decisionsRead.items, (d) => d.id),
     costs: costRead.items,
     git,
