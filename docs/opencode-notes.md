@@ -6,7 +6,7 @@ What nightgem relies on in OpenCode and oh-my-opencode-slim, as observed live ag
 
 Legend: **verified** = observed live. **inferred** = read from the schema or source. **unverified** = not tested.
 
-**On this page:** [Server API (v2)](#server-api-v2) · [Sessions, models and cost](#sessions-models-and-cost) · [Configuration: what is read, and in what order](#configuration-what-is-read-and-in-what-order) · [Permissions](#permissions) · [MCP servers](#mcp-servers) · [Shell outside the permission system](#shell-outside-the-permission-system) · [Children, interrupts and waking](#children-interrupts-and-waking) · [Slim per-run appends](#slim-per-run-appends) · [launchd](#launchd) · [sandbox-exec](#sandbox-exec) · [Desktop app](#desktop-app)
+**On this page:** [Server API (v2)](#server-api-v2) · [Sessions, models and cost](#sessions-models-and-cost) · [Configuration: what is read, and in what order](#configuration-what-is-read-and-in-what-order) · [Permissions](#permissions) · [MCP servers](#mcp-servers) · [Shell outside the permission system](#shell-outside-the-permission-system) · [Temp files and heredocs inside runs](#temp-files-and-heredocs-inside-runs) · [Children, interrupts and waking](#children-interrupts-and-waking) · [Slim per-run appends](#slim-per-run-appends) · [launchd](#launchd) · [sandbox-exec](#sandbox-exec) · [Desktop app](#desktop-app)
 
 ## Server API (v2)
 
@@ -93,6 +93,53 @@ Rule precedence, last match wins: slim agent defaults, global `opencode.json`, `
 - It **bypasses both the permission rules and the guard plugin**, because it runs as no agent. It still runs in the server's own environment, **inside the sandbox**. It is therefore a deterministic probe of the sandbox and env layers only.
 - Every shell child inherits the server environment, including `OPENCODE_SERVER_PASSWORD`. The profile denies `env` and `printenv`, and the guard refuses env dumps, but a script reading its own environment would still see it. Stripping it through a `shell.env` hook is unverified on v2.
 - The default foreground shell timeout is 120000 ms (`timeout: 0` disables it). Whether a `background: true` process outlives its session is unverified, so the process-group kill is the backstop.
+
+## Temp files and heredocs inside runs
+
+Issue #7. A heredoc (`cat <<EOF`), a bare `mktemp` and `${pipestatus[1]}`-style zsh code are everyday agent shell, and inside a sandboxed run the first two fail with `operation not permitted`. Reproduced on OpenCode 2.0.29, macOS 14.6, `/bin/zsh` 5.9 and `/bin/bash` 3.2.57, with a throwaway `HOME`, `XDG_*` and `TMPDIR` and no model calls. Paths below are neutral stand-ins: `RUNTMP` is the run tmp dir, `/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T` is the per-user temp dir.
+
+**Which shell.** The `/shell` route and an agent's bash tool use the same shell service and the same `SHELL`. `shell.created` events report `"shell":"/bin/zsh"` for both: the recorded agent bash call (`test/fixtures/opencode-2.0.29/recorded/events-s2-s.jsonl`, `echo hello-from-spike`, sent by session `ses_ea1f97...`) and a live `/shell` call (`$ZSH_VERSION` = `5.9`, `$0` = `/bin/zsh`). The smoke run agent's `${pipestatus[1]}` only exists in zsh, which fits. So the canary's `/shell` probes are representative of the agent's shell, but see "Not verified" below.
+
+**Which environment.** Both inherit the server's environment unchanged. A live `/shell` under `sandbox-exec` printed `TMPDIR=RUNTMP` (the value the server was started with) and `TMPPREFIX=/tmp/zsh` (zsh's default). OpenCode does not set a `TMPDIR` of its own for `/shell`: the "its own `<os tmp>/opencode`" idea is refuted for that route.
+
+**Root cause.** Setting `TMPDIR` is not enough, because the tools involved do not all read it:
+
+| Tool | Temp location used | Reads `TMPDIR`? | Under the run sandbox |
+|---|---|---|---|
+| zsh heredoc / here-string | `$TMPPREFIX` + random, default `/tmp/zsh`; observed `/private/tmp/zshXXXXXX` | No (`TMPPREFIX` is the knob) | `can't create temp file for here document: operation not permitted` |
+| bash 3.2 heredoc (`/bin/bash`, `sh`) | observed `/private/var/tmp/sh-thd-NNNNNNNNNN` (it falls back to other shared dirs when that one is denied) | No: the run's `TMPDIR` is ignored | `cannot create temp file for here document: Operation not permitted` |
+| `mktemp`, `mktemp -t` (macOS BSD) | the per-user temp dir from `confstr(_CS_DARWIN_USER_TEMP_DIR)`, `/private/var/folders/xx/.../T/tmp.XXXXXXXXXX` | No (`man mktemp`: `TMPDIR` is only a fallback when `confstr` fails) | `mkstemp failed on /var/folders/xx/.../T/tmp.XXXXXXXXXX: Operation not permitted` |
+| `mktemp "$TMPDIR/x.XXXXXX"`, `mktemp -p "$TMPDIR"`, Python `tempfile`, Node `os.tmpdir()` | `TMPDIR` | Yes | works |
+
+The run tmp dir is `<os.tmpdir()>/nightgem-<slug>`, a child of the per-user temp dir, and the sandbox writes allow only that child (`src/sandbox.ts`, `sandboxWriteSubpaths`). The shared locations the shells actually reach for (`/tmp`, `/var/tmp`, the per-user temp dir itself) are all outside the allowlist. That is why a smoke run's decision log said "temp file not permitted" for a heredoc, and why the canary's own `write /tmp` probe (which must be blocked) and the heredoc (which must work) can both be right at once.
+
+**Evidence, reproduced outside OpenCode** (profile `(allow default)(deny file-write*)(allow file-write* (subpath "RUNTMP") (literal "/dev/null"))`, run as `env -i HOME=... PATH=/usr/bin:/bin TMPDIR=RUNTMP sandbox-exec -f p.sb <shell> -c ...`):
+
+```
+zsh -c 'echo $TMPPREFIX'                       -> /tmp/zsh        (also with TMPDIR set to anything)
+zsh  heredoc, TMPDIR=RUNTMP                    -> zsh:1: can't create temp file for here document: operation not permitted
+zsh  heredoc, TMPDIR=RUNTMP TMPPREFIX=RUNTMP/zsh -> works
+bash heredoc, TMPDIR=RUNTMP                    -> cannot create temp file for here document: Operation not permitted
+bash heredoc, sandbox allows only /private/tmp, or only /private/var/tmp, or only /private/var/folders -> works (each alone)
+mktemp (and mktemp -t foo), TMPDIR=RUNTMP      -> mkstemp failed on /var/folders/xx/.../T/tmp.XXXXXXXXXX: Operation not permitted
+mktemp "$TMPDIR/x.XXXXXX"                      -> works
+mktemp -p "$TMPDIR"  (also -d, and -t foo -p)  -> works
+```
+
+The temp file locations were read from a live heredoc (`sleep 4 <<EOF &` then `lsof -a -p $! -d 0`): zsh `/private/tmp/zshXXXXXX`, bash `/private/var/tmp/sh-thd-NNNNNNNNNN`, the latter with `TMPDIR` set to a writable directory, so bash 3.2 does not look at it. Exporting `DARWIN_USER_TEMP_DIR` or `_CS_DARWIN_USER_TEMP_DIR` does not move `mktemp` either.
+
+**Canary probes (T1).** `buildShellProbes` now runs, through `/shell`, and prints nothing: a heredoc written to a file in the run tmp dir, a bare `mktemp` plus a write, `mktemp "$TMPDIR/..."` plus a write, and three silent diagnostics (`[ -n "$ZSH_VERSION" ]`, `$TMPDIR` equals the run tmp dir, `$TMPPREFIX` is under it). The heredoc and bare `mktemp` probes are marked `expectedFailUntilT2`: their failure is logged (`preflight.canary`, `expectedFail: true`) and does not fail the launch. Diagnostics are logged and never gate. The `$TMPDIR` template probe passes today and gates.
+
+**What T2 needs to change.**
+
+1. **zsh heredocs: environment only.** Add `TMPPREFIX=<RUNTMP>/zsh` to the serve environment next to `TMPDIR` (`buildServerEnv` in `src/server.ts`; zsh appends a random suffix to the prefix, so the prefix is a file name prefix inside the run tmp dir and the dir needs no extra rule). Nothing in `sandbox.ts` has to change for this. Verified: it makes the heredoc probe pass under the sandbox profile above.
+2. **Bare `mktemp` and bash heredocs cannot be fixed by environment**, because neither tool reads a variable we control. Options, each to be checked against the "one subpath at a time, say why in the commit body" rule:
+   - **A PATH shim** for `mktemp` (a directory first on the run's `PATH` whose `mktemp` execs `/usr/bin/mktemp -p "$TMPDIR" "$@"` when no template is given). No sandbox change; `/usr/bin/mktemp` called by absolute path still fails, which is safe. Does not help bash heredocs.
+   - **A narrow sandbox rule** that is not a directory grant. Verified live: `(literal "/private/var/tmp")` plus `(regex #"^/private/var/tmp/sh-thd-[0-9]+$")` makes a bash heredoc work, while `echo x > /private/var/tmp/other` and `mkdir` there still fail. The `literal` is needed because bash checks that the directory itself is writable. A single regex for BSD `mktemp` files in the per-user temp dir (`^<per-user temp dir>/tmp\.[A-Za-z0-9]+$`) also made a bare `mktemp` work, but the file lives in a shared dir. Both are widenings and are ask-first.
+   - **Accept bash heredocs not working**: the agent shell is zsh, and `bash script.sh` heredocs are the rare case. The acceptance test for `/bin/bash` in the T2 plan must then be dropped or changed to expect failure.
+3. Wipe and recreate the run tmp dir at start (as planned), then remove `expectedFailUntilT2` from both probes in `tmpFileProbes` (`src/wiring.ts`). Keep the diagnostics.
+
+**Not verified.** The agent's own bash tool could not be driven without a model call. That it uses `/bin/zsh` and the server's environment rests on the recorded `shell.created` events and on the note under "Shell outside the permission system" that every shell child inherits the server environment. If a run ever shows a `TMPDIR` different from the run tmp dir in an agent shell, the `$TMPDIR` diagnostic in the canary is where it would show up first, but only for `/shell`, not for the bash tool.
 
 ## Children, interrupts and waking
 
