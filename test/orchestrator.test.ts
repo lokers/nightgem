@@ -1031,6 +1031,7 @@ describe('watchdog', () => {
     expect(nudges[0]!.text).not.toMatch(/\{\{/);
     expect(h.manifest().nudges).toBe(3);
     expect(h.manifest().state).toBe('stalled');
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'stalled', stopReason: res.stopReason, endedAt: h.manifest().endedAt });
     expect(h.reportStates).toEqual(['stalled']);
     expect(h.server.stopCalls).toBe(1);
     expect(h.server.interrupts).toEqual([]);
@@ -1302,6 +1303,7 @@ describe('signals', () => {
     expect(res).toMatchObject({ state: 'stopped', stopReason: 'signal:SIGTERM' });
     expect(h.server.created).toHaveLength(0);
     expect(h.server.stopCalls).toBe(1);
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'stopped', stopReason: 'signal:SIGTERM', endedAt: h.manifest().endedAt });
     expect(h.reportStates).toEqual(['stopped']);
   });
 });
@@ -1418,6 +1420,41 @@ describe('logging', () => {
 
 const lastAttempt = (h: Harness) => h.manifest().attempts!.at(-1)!;
 
+/** Attempt 1 of a resumed run (closed after a hard stop; its budget was $5) and the open attempt 2 ($10 budget, $4 already spent). */
+const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T01:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 } as const;
+const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
+const CostLineOf = (l: Record<string, unknown>) => ({ ...l }) as never;
+
+/** A resumed run: attempt 1 spent $4 in one (old) plan root, recorded in cost.jsonl; attempt 2 has a $10 budget. */
+function resumed(o: Opts = {}): { h: Harness; oldRoot: string } {
+  const h = makeHarness(o);
+  const oldRoot = h.server.seedSession(4);
+  const line = { ts: '2026-01-01T00:30:00.000Z', sessionId: oldRoot, parentId: null, phase: 'plan', costUsd: 4, estimated: false, source: 'session-info', totalUsd: 4 };
+  mkdirSync(dirname(h.paths.costJsonl), { recursive: true });
+  writeFileSync(h.paths.costJsonl, `${JSON.stringify(line)}\n`);
+  writeManifest(
+    h.paths.runJson,
+    RunManifest.parse({
+      ...h.manifest(),
+      startedAt: OLD.startedAt,
+      costUsd: 4,
+      rootSessions: [{ phase: 'plan', sessionId: oldRoot, costUsd: 4 }],
+      knownSessionIds: [oldRoot],
+      attempts: [OLD, OPEN],
+    }),
+  );
+  h.deps.ledger = new BudgetLedger({
+    budgetUsd: 10,
+    softPct: 0.85,
+    hardPct: 1,
+    costMultiplier: 1,
+    now: () => new Date(h.clock.now()),
+    costLines: [CostLineOf(line)],
+    costAtStartUsd: 4,
+  });
+  return { h, oldRoot };
+}
+
 describe('attempt lifecycle: a fresh launch', () => {
   it('writes attempts[0] at start (open, with the budget and a zero cost at start) and closes it when the run completes', async () => {
     let atPlan: RunManifest | undefined;
@@ -1447,8 +1484,7 @@ describe('attempt lifecycle: a fresh launch', () => {
       budgetUsd: 10,
       costAtStartUsd: 0,
       baselineUsd: 0,
-      attemptSpendUsd: 0,
-      cumulativeUsd: 0,
+      priorCostUsd: 0,
     });
   });
 });
@@ -1607,8 +1643,6 @@ describe('attempt lifecycle: every end path closes the open attempt', () => {
 });
 
 describe('attempt lifecycle: start-up assertions', () => {
-  const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T01:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 } as const;
-  const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
   const withAttempts = (h: Harness, attempts: unknown[], extra: Record<string, unknown> = {}): void => {
     writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), startedAt: '2026-01-01T00:00:00.000Z', costUsd: 4, attempts, ...extra }));
   };
@@ -1670,41 +1704,8 @@ describe('attempt lifecycle: start-up assertions', () => {
 });
 
 describe('attempt lifecycle: attempt 2', () => {
-  const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T01:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 } as const;
-  const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
 
-  /** A resumed run: attempt 1 spent $4 in one (old) plan root, recorded in cost.jsonl; attempt 2 has a $10 budget. */
-  function resumed(o: Opts = {}): { h: Harness; oldRoot: string } {
-    const h = makeHarness(o);
-    const oldRoot = h.server.seedSession(4);
-    const line = { ts: '2026-01-01T00:30:00.000Z', sessionId: oldRoot, parentId: null, phase: 'plan', costUsd: 4, estimated: false, source: 'session-info', totalUsd: 4 };
-    mkdirSync(dirname(h.paths.costJsonl), { recursive: true });
-    writeFileSync(h.paths.costJsonl, `${JSON.stringify(line)}\n`);
-    writeManifest(
-      h.paths.runJson,
-      RunManifest.parse({
-        ...h.manifest(),
-        startedAt: OLD.startedAt,
-        costUsd: 4,
-        rootSessions: [{ phase: 'plan', sessionId: oldRoot, costUsd: 4 }],
-        knownSessionIds: [oldRoot],
-        attempts: [OLD, OPEN],
-      }),
-    );
-    h.deps.ledger = new BudgetLedger({
-      budgetUsd: 10,
-      softPct: 0.85,
-      hardPct: 1,
-      costMultiplier: 1,
-      now: () => new Date(h.clock.now()),
-      costLines: [CostLineOf(line)],
-      costAtStartUsd: 4,
-    });
-    return { h, oldRoot };
-  }
-  const CostLineOf = (l: Record<string, unknown>) => ({ ...l }) as never;
-
-  it('logs baselineUsd, costAtStartUsd and attemptSpendUsd at startup', async () => {
+  it('logs the attempt number, budget, costAtStartUsd, baselineUsd and the prior cost at startup', async () => {
     const { h } = resumed();
     await h.run();
     expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).toMatchObject({
@@ -1712,10 +1713,11 @@ describe('attempt lifecycle: attempt 2', () => {
       budgetUsd: 10,
       costAtStartUsd: 4,
       baselineUsd: 4,
-      attemptSpendUsd: 0,
-      cumulativeUsd: 0, // nothing ingested yet: the ledger fills at the first reconcile
       priorCostUsd: 4,
     });
+    // attempt spend and cumulative cost are 0 until the first reconcile, so the start line leaves them out
+    expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).not.toHaveProperty('attemptSpendUsd');
+    expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).not.toHaveProperty('cumulativeUsd');
   });
 
   it('recordLedger keeps RUN.json costUsd cumulative and writes the open attempt\'s live costUsd (the spend of this attempt)', async () => {
@@ -1803,5 +1805,54 @@ describe('attempt lifecycle: attempt 2', () => {
     await h.run();
     const lines = readFileSync(h.paths.costJsonl, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { sessionId: string; phase: string });
     expect(lines.filter((l) => l.sessionId === oldChild).map((l) => l.phase)).toEqual(['build']); // the current phase was plan
+  });
+});
+
+describe('attempt lifecycle: a failed start never lowers the recorded figures', () => {
+  /** A restart inside the same open attempt: the earlier process had already recorded $2.5 of attempt spend. */
+  function restartedInsideAttempt(o: Opts = {}): Harness {
+    const h = makeHarness(o);
+    writeManifest(
+      h.paths.runJson,
+      RunManifest.parse({
+        ...h.manifest(),
+        startedAt: '2026-01-01T00:00:00.000Z',
+        costUsd: 2.5,
+        costEstimatedUsd: 0.5,
+        attempts: [{ n: 1, startedAt: '2026-01-01T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 0, costUsd: 2.5 }],
+      }),
+    );
+    return h;
+  }
+
+  it('a leftover stop flag: the attempt is closed as failed but keeps its recorded costUsd (2.5)', async () => {
+    const h = restartedInsideAttempt();
+    writeControlFlags(h.paths.controlDir, { hardStop: true });
+    const res = await h.run();
+    expect(res.stopReason).toBe('attempt-invariant');
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'failed', stopReason: 'attempt-invariant', costUsd: 2.5 });
+    expect(h.manifest().costUsd).toBe(2.5);
+    expect(h.manifest().costEstimatedUsd).toBe(0.5);
+  });
+
+  it('a server that fails to start (empty ledger): the attempt is closed as failed but keeps its recorded costUsd (2.5)', async () => {
+    const h = restartedInsideAttempt({ startServerError: new Error('no port') });
+    const res = await h.run();
+    expect(res.stopReason).toBe('server-start-failed');
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'failed', stopReason: 'server-start-failed', costUsd: 2.5 });
+    expect(h.manifest().costUsd).toBe(2.5);
+  });
+
+  it('attempt 2, server start fails, empty ledger: costUsd, costEstimatedUsd and the phase cost of rootSessions stay as recorded', async () => {
+    const { h } = resumed({ startServerError: new Error('no port') });
+    writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), costEstimatedUsd: 1 }));
+    const res = await h.run();
+    expect(res.stopReason).toBe('server-start-failed');
+    const m = h.manifest();
+    expect(m.costUsd).toBe(4);
+    expect(m.costEstimatedUsd).toBe(1);
+    expect(m.rootSessions[0]!.costUsd).toBe(4);
+    expect(m.attempts![0]).toEqual(OLD);
+    expect(m.attempts![1]).toMatchObject({ n: 2, state: 'failed', stopReason: 'server-start-failed', costUsd: 0, costAtStartUsd: 4 });
   });
 });
