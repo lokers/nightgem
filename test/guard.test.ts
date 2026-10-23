@@ -249,6 +249,28 @@ describe('bypass corpus: forms of a denied command', () => {
     ['npm --script-shell=', /^npm run x --script-shell=\/usr\/bin\/gh/],
     ['git bisect run, path', /^git bisect run \/usr\/bin\/gh/],
     ['cp of the binary to a relative target', /^cp \/opt\/homebrew\/bin\/gh \.\/x$/],
+    // path variants of the wrappers and bodies above (each regex requires `/usr/bin/gh`, so deleting the path probe fails)
+    ['env -i, path', /^env -i FOO=1 \/usr\/bin\/gh /],
+    ['env -u, path', /^env -u HOME -u PATH \/usr\/bin\/gh /],
+    ['command -p, path', /^command -p \/usr\/bin\/gh /],
+    ['exec -a, path', /^exec -a x \/usr\/bin\/gh /],
+    ['nohup, path', /^nohup \/usr\/bin\/gh /],
+    ['nice -n, path', /^nice -n 10 \/usr\/bin\/gh /],
+    ['timeout -s, path', /^timeout -s KILL 5 \/usr\/bin\/gh /],
+    ['stdbuf, path', /^stdbuf -oL -eL \/usr\/bin\/gh /],
+    ['sudo -u, path', /^sudo -u root \/usr\/bin\/gh /],
+    ['xargs -I, path', /xargs -I \{\} \/usr\/bin\/gh pr view /],
+    ['find -exec, path', /-exec \/usr\/bin\/gh /],
+    ['caffeinate, path', /^caffeinate -i \/usr\/bin\/gh /],
+    ['arch, path', /^arch -arm64 \/usr\/bin\/gh /],
+    ['script, path', /^script -q \/dev\/null \/usr\/bin\/gh /],
+    ['sh -c, path', /^sh -c "\/usr\/bin\/gh /],
+    ['function body, path', /^g\(\) \{ \/usr\/bin\/gh /],
+    ['awk system(), path', /^awk 'BEGIN\{system\("\/usr\/bin\/gh /],
+    ['git rebase -x, path', /^git rebase -i -x '\/usr\/bin\/gh /],
+    ['git submodule foreach, path', /^git submodule foreach '\/usr\/bin\/gh /],
+    ['npx -c, path', /^npx -c '\/usr\/bin\/gh /],
+    ['npm_config_script_shell=', /^npm_config_script_shell=gh npm run x$/],
   ];
   it.each(FORMS)('the corpus blocks the %s form', (_name, re) => {
     expect(blocked.some((p) => re.test(p)), String(re)).toBe(true);
