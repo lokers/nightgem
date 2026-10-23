@@ -1,0 +1,12 @@
+{
+  "name": "nightgem-guard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": { "import": "./index.mjs" },
+    "./server": { "import": "./index.mjs" },
+    "./decide": { "import": "./decide.mjs" }
+  }
+}

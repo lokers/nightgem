@@ -1,0 +1,1 @@
+{"ts":"2026-10-21T20:20:00.000Z","id":"D-1","kind":"migration","summary":"Add column users.nickname","rationale":"Spec implies a nickname field","oracleApproved":false,"needsHumanAttention":true}

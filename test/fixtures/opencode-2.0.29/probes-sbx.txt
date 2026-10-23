@@ -1,0 +1,5 @@
+shell|echo hi > /tmp/outside-spike6.txt
+shell|ln -sfn /tmp /Users/alice/work/.specs/ng-spike/rec/linkout3 && echo hi > /Users/alice/work/.specs/ng-spike/rec/linkout3/outside-spike7.txt
+shell|python3 -c "open('/tmp/outside-spike8.txt','w').write('x')"
+shell|echo hi > /Users/alice/work/.specs/ng-spike/rec/sbx-allowed.txt
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && git fetch origin && git log --oneline -1

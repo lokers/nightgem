@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "slug": "demo",
+  "budgetUsd": 10,
+  "softPct": 0.85,
+  "hardPct": 1,
+  "costMultiplier": 1,
+  "state": "completed",
+  "phase": "report",
+  "pid": 4242,
+  "launchdLabel": "com.example.nightgem.demo",
+  "serverUrl": "http://127.0.0.1:50000",
+  "port": 50000,
+  "controlDir": "/Users/alice/Library/Application Support/nightgem/demo",
+  "runDir": "/Users/alice/work/.specs/demo/.run",
+  "xdgDataHome": "/Users/alice/Library/Application Support/nightgem/demo/xdg-data",
+  "model": "anthropic/claude-sonnet-5-5",
+  "opencodeVersion": "2.0.29",
+  "rootSessions": [
+    {
+      "phase": "plan",
+      "sessionId": "ses_demo00000001",
+      "costUsd": 0.9
+    },
+    {
+      "phase": "build",
+      "sessionId": "ses_demo00000002",
+      "costUsd": 0.4
+    },
+    {
+      "phase": "review",
+      "sessionId": "ses_demo00000003",
+      "costUsd": 0.4
+    },
+    {
+      "phase": "report",
+      "sessionId": "ses_demo00000004",
+      "costUsd": 0.1
+    }
+  ],
+  "knownSessionIds": [
+    "ses_demo00000001",
+    "ses_demo00000002",
+    "ses_demo00000003",
+    "ses_demo00000004",
+    "ses_demo00000005",
+    "ses_demo00000006"
+  ],
+  "costUsd": 1.8,
+  "costEstimatedUsd": 0,
+  "repos": [
+    {
+      "name": "acme-api",
+      "path": "/Users/alice/work/acme-api",
+      "defaultBranch": "main",
+      "baseline": {
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch": "main",
+        "porcelainHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stashCount": 0
+      }
+    },
+    {
+      "name": "acme-web",
+      "path": "/Users/alice/work/acme-web",
+      "defaultBranch": "main",
+      "baseline": {
+        "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "branch": "dev",
+        "porcelainHash": "cccccccccccccccccccccccccccccccccccccccc000000000000000000000000",
+        "stashCount": 1
+      }
+    }
+  ],
+  "worktrees": [
+    {
+      "repo": "acme-api",
+      "path": "/Users/alice/work/acme-api/.worktrees/demo/t1",
+      "branch": "feat/demo-t1",
+      "task": "t1",
+      "kind": "task"
+    }
+  ],
+  "createdAt": "2026-01-15T22:00:00.000Z",
+  "startedAt": "2026-01-15T22:00:30.000Z",
+  "endedAt": "2026-01-15T23:10:00.000Z",
+  "nudges": 0,
+  "defects": []
+}

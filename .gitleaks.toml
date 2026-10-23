@@ -1,0 +1,17 @@
+# gitleaks config: the default rules, plus a narrow allowlist for the fake secrets that the
+# redaction and auth tests use on purpose. Real secrets never belong in this repo.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake secrets used by the redaction and auth tests (test files only, exact values)"
+condition = "AND"
+paths = [
+  '''(^|/)test/(client\.contract|orchestrator|events)\.test\.ts$''',
+]
+regexTarget = "line"
+regexes = [
+  '''pw-test-0123456789''',
+  '''f00dfacecafebeef0123456789abcdef0123456789abcdef''',
+  '''Authorization: Bearer abcdef1234567890''',
+]

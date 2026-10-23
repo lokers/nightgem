@@ -1,0 +1,1111 @@
+{
+ "model": "anthropic/claude-haiku-5-5",
+ "small_model": "anthropic/claude-haiku-5-5",
+ "permissions": [
+  {
+   "action": "*",
+   "resource": "*",
+   "effect": "allow"
+  },
+  {
+   "action": "read",
+   "resource": "*.env",
+   "effect": "deny"
+  },
+  {
+   "action": "read",
+   "resource": "*.env.*",
+   "effect": "deny"
+  },
+  {
+   "action": "read",
+   "resource": "*.env.example",
+   "effect": "allow"
+  },
+  {
+   "action": "read",
+   "resource": "*.env.defaults",
+   "effect": "allow"
+  },
+  {
+   "action": "read",
+   "resource": "*.env.cursor.example",
+   "effect": "allow"
+  },
+  {
+   "action": "shell",
+   "resource": "*git*push*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*receive-pack*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gh",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|gh *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "opencode",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|opencode *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "claude",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|claude *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "cursor-agent",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|cursor-agent *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*other-runner*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "security",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|security *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "launchctl",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|launchctl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "osascript",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|osascript *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "crontab",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|crontab *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*git config --global*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*npm * -g*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*npm * --global*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "brew",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|brew *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "aws",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|aws *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gcloud",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|gcloud *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gsutil",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|gsutil *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "kubectl",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|kubectl *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "docker",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|docker *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "helm",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|helm *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "argocd",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|argocd *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "terraform",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "* terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*/terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*'terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*\"terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*(terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*;terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*&terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*|terraform *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*--watch*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*npm run dev*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*npm run start*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*npm run serve*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*nx serve*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*curl * | *sh*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*wget * | *sh*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*curl * | *bash*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*.env",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*.env *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*.env.local*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*.env.production*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*.env.development*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*printenv*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "env",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "env | *",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*OPENCODE_SERVER_PASSWORD*",
+   "effect": "deny"
+  },
+  {
+   "action": "shell",
+   "resource": "*",
+   "effect": "ask"
+  },
+  {
+   "action": "question",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "wait_for_user",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "interview_submit_state",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "acp_run",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "marketplace_*",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "atlassian_*",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "/Users/alice/work/*/.worktrees/ng-spike/**",
+   "effect": "allow"
+  },
+  {
+   "action": "edit",
+   "resource": "/Users/alice/work/.specs/ng-spike/**",
+   "effect": "allow"
+  },
+  {
+   "action": "edit",
+   "resource": "/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode/**",
+   "effect": "allow"
+  },
+  {
+   "action": "edit",
+   "resource": "**/SPEC.md",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "**/RUN.json",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "**/.run/.opencode/**",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "**/.run/opencode.json",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "**/api-spec.yaml",
+   "effect": "deny"
+  },
+  {
+   "action": "edit",
+   "resource": "**/libs/api-client/src/generated/**",
+   "effect": "deny"
+  },
+  {
+   "action": "external_directory",
+   "resource": "*",
+   "effect": "deny"
+  },
+  {
+   "action": "external_directory",
+   "resource": "/Users/alice/work/**",
+   "effect": "allow"
+  },
+  {
+   "action": "external_directory",
+   "resource": "/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode/**",
+   "effect": "allow"
+  },
+  {
+   "action": "external_directory",
+   "resource": "/Users/alice/.claude/plugins/marketplaces/**",
+   "effect": "allow"
+  },
+  {
+   "action": "external_directory",
+   "resource": "/Users/alice/.agents/skills/**",
+   "effect": "allow"
+  }
+ ]
+}

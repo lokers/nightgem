@@ -1,0 +1,12 @@
+{"ts":"2026-10-21T20:05:00.000Z","id":"phase:plan","repo":"_run","branch":"-","worktree":"-","state":"running","attempt":0,"phase":"plan"}
+{"ts":"2026-10-21T20:40:00.000Z","id":"phase:plan","repo":"_run","branch":"-","worktree":"-","state":"done","attempt":0,"phase":"plan"}
+{"ts":"2026-10-21T20:41:00.000Z","id":"phase:build","repo":"_run","branch":"-","worktree":"-","state":"running","attempt":0,"phase":"build"}
+{"ts":"2026-10-21T20:10:00.000Z","id":"api","repo":"acme-api","branch":"feat/api-endpoint","worktree":"/fake/acme-api/.worktrees/demo-feature/api","state":"running","attempt":0,"phase":"build"}
+{"ts":"2026-10-21T21:00:00.000Z","id":"ui","repo":"acme-web","branch":"feat/ui-page","worktree":"/fake/acme-web/.worktrees/demo-feature/ui","state":"running","attempt":0,"phase":"build"}
+{"ts":"2026-10-21T21:30:00.000Z","id":"api","repo":"acme-api","branch":"feat/api-endpoint","worktree":"/fake/acme-api/.worktrees/demo-feature/api","state":"done","attempt":1,"verify":[{"cmd":"go build ./...","exit":0},{"cmd":"go test ./pkg/a | b","exit":1}],"oracleVerdict":"rejected: missing test","phase":"build"}
+{"ts":"2026-10-21T21:45:00.000Z","id":"api","repo":"acme-api","branch":"feat/api-endpoint","worktree":"/fake/acme-api/.worktrees/demo-feature/api","state":"done","attempt":2,"verify":[{"cmd":"go build ./...","exit":0},{"cmd":"go test ./...","exit":0}],"oracleVerdict":"approved","phase":"build"}
+{"ts":"2026-10-21T21:50:00.000Z","id":"ui","repo":"acme-web","branch":"feat/ui-page","worktree":"/fake/acme-web/.worktrees/demo-feature/ui","state":"done","attempt":1,"verify":[{"cmd":"npm run type-check","exit":0},{"cmd":"npm test","exit":0}],"oracleVerdict":"approved","phase":"build"}
+{"ts":"2026-10-21T22:10:00.000Z","id":"integration:acme-api","repo":"acme-api","branch":"feat/demo-feature-integration","worktree":"/fake/acme-api/.worktrees/demo-feature/_integration","state":"done","attempt":1,"verify":[{"cmd":"go test ./...","exit":0}],"oracleVerdict":"approved","phase":"review"}
+{"ts":"2026-10-21T22:20:00.000Z","id":"review-fix-1","repo":"acme-web","branch":"fix/review-1","worktree":"/fake/acme-web/.worktrees/demo-feature/review-fix-1","state":"done","attempt":1,"verify":[{"cmd":"npm test","exit":0}],"oracleVerdict":"approved","phase":"review"}
+{"ts":"2026-10-21T22:30:00.000Z","id":"phase:review","repo":"_run","branch":"-","worktree":"-","state":"done","attempt":0,"phase":"review"}
+not json at all

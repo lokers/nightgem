@@ -1,0 +1,17 @@
+{
+ "status": 200,
+ "body": {
+  "data": {
+   "id": "msg_15e05eac4001YLmBv8rQISyA6C",
+   "sessionID": "ses_ea1fa15a6ffed3yg9evBd9FQkB",
+   "time": {
+    "created": 1792578808517
+   },
+   "type": "user",
+   "payload": {
+    "text": "Reply with exactly the single word: pong"
+   },
+   "delivery": "steer"
+  }
+ }
+}

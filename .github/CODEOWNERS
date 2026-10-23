@@ -1,0 +1,24 @@
+# Everything needs the maintainer's review by default.
+*                                   @lokers
+
+# Safety-critical paths: they decide whether an unattended run can push,
+# escape its directory, leak a secret or overspend. See CONTRIBUTING.md.
+/profile/                           @lokers
+/src/profile.ts                     @lokers
+/src/sandbox.ts                     @lokers
+/src/rulecheck.ts                   @lokers
+/src/userprofile.ts                 @lokers
+/src/skills.ts                      @lokers
+/src/install.ts                     @lokers
+/src/tripwires.ts                   @lokers
+/src/budget.ts                      @lokers
+/src/orchestrator.ts                @lokers
+/test/guard.test.ts                 @lokers
+/test/profile.test.ts               @lokers
+/test/rulecheck.test.ts             @lokers
+
+# CI, release plumbing and the community files.
+/.github/                           @lokers
+/SECURITY.md                        @lokers
+/CODE_OF_CONDUCT.md                 @lokers
+/LICENSE                            @lokers

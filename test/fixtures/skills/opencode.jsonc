@@ -1,0 +1,7 @@
+// Fake user config: the apiKey must never be read into, or returned from, skill detection.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": { "acme": { "options": { "apiKey": "sk-FAKE-SECRET-DO-NOT-SHOW" } } },
+  "skills": ["~/plugins-a/skills", "~/plugins-b/skills", "https://example.invalid/skills", "relative/skills",],
+  "mcp": { "x": { "headers": { "Authorization": "Bearer FAKE-TOKEN-DO-NOT-LEAK" } } }
+}

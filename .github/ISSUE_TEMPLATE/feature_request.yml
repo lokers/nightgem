@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest an improvement or a new capability.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. nightgem puts safety first, so a request that loosens a safety layer needs a clear reason and a plan for the extra probes and tests it will need.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe your situation, not only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to see?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+  - type: dropdown
+    id: safety
+    attributes:
+      label: Does this touch safety-critical behaviour?
+      description: Push, writes outside the workspace, secret reads, permissions, the sandbox or the budget. See CONTRIBUTING.md.
+      options:
+        - "No"
+        - "Yes"
+        - "Not sure"
+    validations:
+      required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I would be willing to open a pull request for this.

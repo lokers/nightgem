@@ -1,0 +1,126 @@
+{
+ "data": [
+  {
+   "id": "msg_15e068a48001tTUVGdix297gS1",
+   "time": {
+    "created": 1792578849352
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_15e067fcf001FmA283v4WwOWEE",
+   "time": {
+    "created": 1792578846676,
+    "streamed": 1792578849301,
+    "completed": 1792578849349
+   },
+   "type": "assistant",
+   "agent": "fixer",
+   "model": {
+    "id": "claude-haiku-5-5",
+    "providerID": "anthropic"
+   },
+   "content": [
+    {
+     "type": "reasoning",
+     "text": "",
+     "state": {
+      "signature": "CAQS4wUKEggTEAEYAjgBQgh0aGlua2luZxIMMRUyqeRNwqS3ScJzGgxSr3uFM/TXhK8DThMiMIgKShw6iJooaMk04WdonAE2xoewCALpMHJvcj2cWcfbwaVeGcz5UbpXIAlsodLk6yr+BPoX+NKLpoRTPJgtIPfJXomzpszJ05NmAA2lk5A20sjnkaXK7/idEp/RXiZQsm4NDMjIATbj7TIzRqcm4s6tU93s98RPycg8EJbdtdfMCHQIZAf6XoRIMOQDtDH5o1yLwk27dr42UgmVtvACgXavj1Dokgf3bO7eZwoKhzhd/1PTYgVHl3XMinkbkGPuwWPYsFRUMMcyktrETpDLE9Kl43M2jmZ4uCxyWh7+wFxRxt+gzWHvKqLbTW3FXD0nwyL3w4bZtl2a7f8xWyzIft252IpUlVoG+RJR0llkeEK88FLId1YZSAFOiCC+DdgFqpw79qQ+rm10SdM1lS2ERAzrJnwniOBBWvQ0HyKmgDg0OqnBUqURQKo+O/HMecO4fwsFXWAaXefBK/nfgswwPSannufu3LGMDw5ou/QN+j9peU5uhbc6YNhitP4BqNfeBThtR09tZKva4Jaxou82qWncme/A14A2KyeQ+5hyycGZUuVh2BPOPRuzWifeACA5DhdtY4oZcCEM93EiiCxxbETLyfBYR2gQxtDrSnsxI1Rp7n8DtIN2l2JV4ljrcOXGOXrv4/n+DrbJZi5kgw+oEnnFxzbaD+kBK1G/b+Sui5uqj+kb1GgT+StUbKpC3ESLb+mqlhx0JS5p0NYiDWwjY2TfRE66JmjzK9wzd5PD0o+jfpIH5KbNAAkACLtwnVM1EPLAwW79EJRpcBStC81t+UBq0LoiJZrFYJwyS+4RiopjnrjRqJo3or5PBil02jt/9F6vL6vZHm43w48CYUjzZ4DAUsfweLGMj7CUSF6o2ofRTof9Ks+4rfqCbi/2pqS8qdAhsd6HDHe0tInnjkrcyGSqGAE="
+     },
+     "time": {
+      "created": 1792578848984,
+      "completed": 1792578848990
+     }
+    },
+    {
+     "type": "text",
+     "text": "The shell command was denied by the permission system (\"autonomous run: denied\"), so `echo hello-from-spike` did not run. I used the shell tool once, as you asked, and did not retry. I can't confirm completion, so I'm not replying \"done.\""
+    }
+   ],
+   "snapshot": {
+    "start": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "end": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "end_turn",
+   "cost": 0.0003103,
+   "tokens": {
+    "input": 2,
+    "output": 81,
+    "reasoning": 85,
+    "cache": {
+     "read": 21435,
+     "write": 102
+    }
+   }
+  },
+  {
+   "id": "msg_15e065a6e001hW0Vr6khPLyLsn",
+   "time": {
+    "created": 1792578837115,
+    "streamed": 1792578838458,
+    "completed": 1792578846661
+   },
+   "type": "assistant",
+   "agent": "fixer",
+   "model": {
+    "id": "claude-haiku-5-5",
+    "providerID": "anthropic"
+   },
+   "content": [
+    {
+     "type": "tool",
+     "id": "toolu_bdrk_01Dt3N6AHyq6XkZ258V8jJne",
+     "name": "shell",
+     "executed": false,
+     "state": {
+      "status": "error",
+      "input": {
+       "command": "echo hello-from-spike"
+      },
+      "error": {
+       "type": "permission.rejected",
+       "message": "autonomous run: denied"
+      }
+     },
+     "time": {
+      "created": 1792578838363,
+      "ran": 1792578838428,
+      "completed": 1792578846617
+     }
+    }
+   ],
+   "snapshot": {
+    "start": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "end": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "files": []
+   },
+   "finish": "tool-calls",
+   "rawFinish": "tool_use",
+   "cost": 0.00025348,
+   "tokens": {
+    "input": 4,
+    "output": 54,
+    "reasoning": 0,
+    "cache": {
+     "read": 21333,
+     "write": 102
+    }
+   }
+  },
+  {
+   "id": "msg_15e065a56001159GDlopsPsSjv",
+   "time": {
+    "created": 1792578837095
+   },
+   "text": "Use the shell tool exactly once to run: echo hello-from-spike . Then reply done.",
+   "type": "user"
+  }
+ ],
+ "cursor": {
+  "previous": "eyJpZCI6Im1zZ18xNWUwNjhhNDgwMDF0VFVWR2RpeDI5N2dTMSIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6InByZXZpb3VzIn0",
+  "next": "eyJpZCI6Im1zZ18xNWUwNjVhNTYwMDExNTlHRGxvcHNQc1NqdiIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6Im5leHQifQ"
+ }
+}

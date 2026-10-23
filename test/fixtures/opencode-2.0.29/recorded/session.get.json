@@ -1,0 +1,30 @@
+{
+ "status": 200,
+ "body": {
+  "data": {
+   "id": "ses_ea1fa15a6ffed3yg9evBd9FQkB",
+   "projectID": "c91fae9d9dfd1b093ca26e2cd92577222306da56",
+   "agent": "fixer",
+   "cost": 0.00267965,
+   "tokens": {
+    "input": 4,
+    "output": 4,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 21418
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792578808508,
+    "updated": 1792578809891,
+    "idle": 1792578809893
+   },
+   "title": "s1-basic",
+   "location": {
+    "directory": "/Users/alice/work/.specs/ng-spike/.run"
+   }
+  }
+ }
+}

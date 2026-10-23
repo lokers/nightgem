@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "workspaceRoot": "/fake",
+  "slug": "budget-run",
+  "budgetUsd": 1,
+  "state": "aborted-budget",
+  "phase": "build",
+  "launchdLabel": "dev.nightgem.budget-run",
+  "controlDir": "/fake/control/budget-run",
+  "runDir": "/fake/specs/budget-run/.run",
+  "xdgDataHome": "/fake/control/budget-run/xdg-data",
+  "model": "anthropic/claude-sonnet-5-5",
+  "costUsd": 1.05,
+  "costEstimatedUsd": 0,
+  "repos": [
+    { "name": "acme-api", "path": "/fake/acme-api", "defaultBranch": "master",
+      "baseline": { "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "branch": "master", "porcelainHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "stashCount": 1 } }
+  ],
+  "worktrees": [
+    { "repo": "acme-api", "path": "/fake/acme-api/.worktrees/budget-run/api", "branch": "feat/api-endpoint", "task": "api", "kind": "task" }
+  ],
+  "createdAt": "2026-10-21T20:00:00.000Z",
+  "startedAt": "2026-10-21T20:05:00.000Z",
+  "endedAt": "2026-10-21T20:50:00.000Z",
+  "stopReason": "hard stop at 105% of budget",
+  "defects": [
+    { "ts": "2026-10-21T20:49:00.000Z", "kind": "hard-stop-lag", "message": "Child session ses_c2 kept running 12s after interrupt", "sessionId": "ses_c2" }
+  ]
+}

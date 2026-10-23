@@ -1,0 +1,10 @@
+export declare const APP: 'nightgem';
+export declare const ENV_PREFIX: 'NIGHTGEM_';
+export declare const LABEL_PREFIX: 'dev.nightgem.';
+export declare const MARKER: 'nightgem:managed';
+export declare const CONFIG_DIR_NAME: 'nightgem';
+export declare const CONTROL_DIR_NAME: 'nightgem';
+export declare const TMP_PREFIX: 'nightgem-';
+export declare const COMMANDS: Readonly<{ main: 'nightgem'; status: 'nightgem-status'; stop: 'nightgem-stop' }>;
+export declare const GUARD_PACKAGE: 'nightgem-guard';
+export declare const MAINTAINER_EMAIL: 'lokers@gmail.com';

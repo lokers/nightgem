@@ -1,0 +1,25 @@
+shell|git push origin main
+shell|git -C /Users/alice/work/.specs/ng-spike/git/work push origin main
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && git push
+shell|env git push origin main
+shell|sh -c 'git push origin main'
+shell|/usr/bin/git push origin main
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && bash -c "git pu""sh origin main"
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && python3 -c "import os;os.system('g'+'it pu'+'sh origin main')"
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && git -c remote.origin.pushurl=file:///Users/alice/work/.specs/ng-spike/git/bare.git push origin main
+shell|printf 'git push origin main' | sh
+shell|opencode run hi
+shell|claude -p hi
+shell|gh pr create --title x
+shell|cat /Users/alice/work/.specs/ng-spike/git/work/.env
+shell|env | grep OPENCODE_SERVER
+shell|echo hi > /tmp/outside-spike.txt
+shell|git config --global user.name hacked
+shell|kubectl get pods
+shell|npm run dev
+tool-read|/Users/alice/work/.specs/ng-spike/git/work/.env
+tool-write|/Users/alice/work/nightgem/should-not-exist.txt
+tool-write|/Users/alice/work/.specs/ng-spike/SPEC.md
+tool-write|/Users/alice/work/.specs/ng-spike/ok-allowed.txt
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && git status --short
+shell|cd /Users/alice/work/.specs/ng-spike/git/work && git fetch origin

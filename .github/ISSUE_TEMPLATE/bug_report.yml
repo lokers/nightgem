@@ -1,0 +1,86 @@
+name: Bug report
+description: Something does not work as documented.
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security vulnerabilities do not go here.** Use [private vulnerability reporting](https://github.com/lokers/nightgem/security/advisories/new) instead.
+
+        Please redact secrets, API keys, tokens, passwords, personal paths and company names from everything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest set of commands or spec that triggers it.
+      placeholder: |
+        1. node bin/nightgem.mjs ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: nightgem-version
+    attributes:
+      label: nightgem version or commit
+      placeholder: "0.1.0 or a commit hash"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "e.g. 15.1 (arm64)"
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node version
+      placeholder: "output of `node --version`"
+    validations:
+      required: true
+  - type: input
+    id: opencode
+    attributes:
+      label: OpenCode version
+      placeholder: "output of `opencode --version`"
+    validations:
+      required: true
+  - type: input
+    id: slim
+    attributes:
+      label: oh-my-opencode-slim version
+      placeholder: "e.g. 3.x"
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`node bin/nightgem.mjs doctor` output"
+      description: Paste the full output. **Redact secrets** and anything personal first.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines (optional)
+      description: For example from `.run/orchestrator.log`. Redact secrets first, and never paste the server password file.
+      render: text
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Checks
+      options:
+        - label: I redacted secrets and personal data from everything above.
+          required: true
+        - label: This is not a security vulnerability (those go to private reporting).
+          required: true

@@ -1,0 +1,26 @@
+{
+  "POST /api/session/{id}/interrupt (idle)": {
+    "status": 200,
+    "body": {
+      "interrupted": false
+    }
+  },
+  "POST /api/session/{id}/interrupt (running)": {
+    "status": 200,
+    "body": {
+      "interrupted": true
+    }
+  },
+  "POST /api/session/{id}/permission/{rid}/reply": {
+    "status": 204,
+    "body": null
+  },
+  "POST /api/session/{id}/prompt": "see session.prompt.json",
+  "POST /api/pair": {
+    "status": 200,
+    "body": {
+      "code": "REDACTED",
+      "expires_in": 300
+    }
+  }
+}

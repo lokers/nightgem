@@ -1,0 +1,57 @@
+// nightgem user profile. Written by `node <checkout>/bin/nightgem.mjs install`; edit freely.
+// JSONC: comments and trailing commas are allowed. Check it with `node <checkout>/bin/nightgem.mjs profile validate`.
+{
+  "version": 1,
+
+  // Required. Where the repos and `.specs/<slug>` live. Must be an existing directory that is NOT inside a git
+  // work tree and not your home directory, ~/Library, ~/.config or ~/.ssh. `~` is expanded.
+  "workspaceRoot": "{{WORKSPACE}}",
+
+  // Optional. A markdown file with workspace-specific instructions, injected into the orchestrator, fixer and
+  // oracle prompts. Relative paths resolve against this file's directory.
+  // "instructionsFile": "~/.config/nightgem/instructions.md",
+
+  // Optional per-repo verify tools, checked by `doctor` (names of binaries that must be on the job PATH).
+  // The toolchain defaults come from the repo itself (package.json scripts, go.mod, Cargo.toml).
+  // "repos": { "acme-api": { "tools": ["golangci-lint"] } },
+  "repos": {},
+
+  // Issue tracker, used only in the interactive spec phase. The overnight run never calls it.
+  // Leave empty and the spec phase asks you to paste the ticket.
+  "tracker": {
+    // "keyPattern": "[A-Z][A-Z0-9]+-\\d+",
+    // "fetchCommand": "my-tracker-cli view {KEY} --json",            // {KEY} = the matched key
+    // "linkedFetchCommand": "my-tracker-cli view {KEYS} --json",     // {KEYS} = linked keys, space-separated
+    // "notes": "Free text shown in the spec phase (tooling hints, caveats).",
+    // Opt-in: assign and transition the top-level issue before the spec is drafted.
+    // "autoClaim": {
+    //   "enabled": true,
+    //   "when": { "status": "Backlog", "unassigned": true },
+    //   "command": "my-tracker-cli claim {KEY}",
+    //   "verifyCommand": "my-tracker-cli view {KEY} --json"
+    // }
+  },
+
+  // Skills for runs. `exclude` takes names or globs; excluded skills are disabled for the run.
+  "skills": {
+    "required": [],
+    "exclude": [],
+    "extraRoots": []
+  },
+
+  // Extra safety denies, on top of the built-in defaults.
+  "deny": {
+    "commands": [],       // binaries the run may not execute
+    "shellPatterns": [],  // shell command globs to deny
+    "secretPaths": [],    // $HOME-relative paths the run may not read, e.g. ".config/some-tool"
+    "editPaths": []       // globs the run may not edit, e.g. "**/generated/**"
+  },
+
+  // Per-agent model, "provider/model" or "provider/model#variant". NIGHTGEM_<AGENT>_MODEL wins at launch.
+  "models": {},
+
+  // Local-only terms that `doctor --audit-repo` flags as leaks, matched case-insensitively. Never committed.
+  "audit": {
+    "bannedTerms": []
+  }
+}

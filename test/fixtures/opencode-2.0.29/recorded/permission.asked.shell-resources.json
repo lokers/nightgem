@@ -1,0 +1,184 @@
+[
+ {
+  "id": "per_15e06fa0c001n3AXo3ICPhxIa6",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "echo b",
+   "cat"
+  ],
+  "save": [
+   "echo *",
+   "cat *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e06f1aa0019g7Smsz3ghuhFu",
+   "id": "toolu_bdrk_01ViYVY334NzsABoZ4BnELeV"
+  }
+ },
+ {
+  "id": "per_15e07002b001gyOo1hdvwAHNpe",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "sh -c 'echo c'"
+  ],
+  "save": [
+   "sh *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e06fa45001lwk3QpMGhAMHo8",
+   "id": "toolu_bdrk_015yZj8t1mPDMBdfPWBrvoaw"
+  }
+ },
+ {
+  "id": "per_15e0707340011kQUOln9dnBNZD",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "env echo d"
+  ],
+  "save": [
+   "env *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e070063001PznBoCXSI3UgpU",
+   "id": "toolu_bdrk_01BC89dA4qmgS2dQYBT6jKb5"
+  }
+ },
+ {
+  "id": "per_15e070d74001p45vk0TsKk2xoM",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "ls /nonexistent-x",
+   "echo e"
+  ],
+  "save": [
+   "ls *",
+   "echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e07077f0010rWS79Rw3rnqph",
+   "id": "toolu_bdrk_011ggpdzC3Qb36EYBnf8Q5Pq"
+  }
+ },
+ {
+  "id": "per_15e071ac5001I3AxpShTGCcNfZ",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "echo f > /tmp/spike-f.txt"
+  ],
+  "save": [
+   "echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e070db3001nB0Un11O8n5lNo",
+   "id": "toolu_bdrk_01KQjj5TRx6Vgu9fb7ahg2zY"
+  }
+ },
+ {
+  "id": "per_15e072143001zsofNVKEVPHYE9",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "echo g"
+  ],
+  "save": [
+   "echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e071b54001NYiSwFHuuwHdgQ",
+   "id": "toolu_bdrk_01GANZUXKkKJfJqeHajcK1w9"
+  }
+ },
+ {
+  "id": "per_15e072c250012ZXcCINYLVbZto",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "echo $(echo h)",
+   "echo h"
+  ],
+  "save": [
+   "echo *",
+   "echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e0722a4001NBIiRYarGtWDG7",
+   "id": "toolu_bdrk_011M54rrJs86V7TzynASKzs9"
+  }
+ },
+ {
+  "id": "per_15e0734f5001J25kUAgMl64HLO",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "git -C /tmp status"
+  ],
+  "save": [
+   "git -C *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e072c6c001zvuTMNQIo3Wfy4",
+   "id": "toolu_bdrk_01DvMGyx3cMDNC7U1KnkaNLB"
+  }
+ },
+ {
+  "id": "per_15e0739a2001uxyirSBnXNPOVo",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "FOO=1 echo i"
+  ],
+  "save": [
+   "echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e0735420012i52TpPfpFgDko",
+   "id": "toolu_bdrk_013MGWNDcrVNTFww1Ydh7Sdd"
+  }
+ },
+ {
+  "id": "per_15e073ef8001dhRNCbt42SK1m6",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "/bin/echo j"
+  ],
+  "save": [
+   "/bin/echo *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e0739dc00138GTiFFQHk3uYu",
+   "id": "toolu_bdrk_01BAW1GugCg7PvmViBSyyv8x"
+  }
+ },
+ {
+  "id": "per_15e0743c1001mPNzo7GW2QhPzG",
+  "sessionID": "ses_ea1f90ee3ffe3ffWRDPl1vYKJn",
+  "action": "shell",
+  "resources": [
+   "bash -lc \"echo k\""
+  ],
+  "save": [
+   "bash *"
+  ],
+  "source": {
+   "type": "tool",
+   "messageID": "msg_15e073f29001dyoSJHISMXGkPw",
+   "id": "toolu_bdrk_01Dgir2zmjaF2ZzQkFgprux9"
+  }
+ }
+]

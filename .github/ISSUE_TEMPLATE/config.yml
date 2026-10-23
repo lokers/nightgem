@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/lokers/nightgem/security/advisories/new
+    about: Please do not open a public issue for a vulnerability. Use GitHub private vulnerability reporting.
+  - name: Read the safety model first
+    url: https://github.com/lokers/nightgem/blob/main/docs/safety-model.md
+    about: Check the safety model and the known residual risks before reporting a safety concern.

@@ -1,0 +1,147 @@
+{
+ "data": [
+  {
+   "id": "msg_15e092a44001Xhl62idAeLDQjr",
+   "time": {
+    "created": 1792579021381
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "type": "compaction",
+   "id": "msg_15e091f44001tCq5UunEOzn1m8",
+   "time": {
+    "created": 1792579018571
+   },
+   "status": "completed",
+   "reason": "manual",
+   "model": {
+    "id": "claude-haiku-5-5",
+    "providerID": "anthropic"
+   },
+   "summary": "## Objective\n- The user asked for two short sentences about the sea, which the assistant has written.\n\n## Requirements\n- Two short sentences about the sea.\n\n## Decisions\n- (none)\n\n## Work State\n### Completed\n- Wrote two sentences about the sea.\n\n### Active\n- (none)\n\n### Blocked\n- (none)\n\n## Next Move\n1. (none)\n\n## Relevant Files\n(none)\n\n## Important Context\n- The delivered text: \"The sea stretches endlessly under a restless sky, its waves rolling in with a steady rhythm. Salt spray drifts on the wind as gulls circle above the rising tide.\"",
+   "recent": "[User]: Now write two short sentences about mountains.\n\n[Assistant]: Mountains rise above the clouds, their peaks crowned in snow that glows at dawn. Their ancient slopes stand silent, holding the patient weight of centuries.",
+   "cost": 0.002182195,
+   "tokens": {
+    "input": 4,
+    "output": 203,
+    "reasoning": 0,
+    "cache": {
+     "read": 6167,
+     "write": 16149
+    }
+   }
+  },
+  {
+   "id": "msg_15e0918f8002IfY93sXnScDXIk",
+   "time": {
+    "created": 1792579016952
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_15e09118b001JzcOlgmCkJnAQ5",
+   "time": {
+    "created": 1792579015057,
+    "streamed": 1792579016911,
+    "completed": 1792579016951
+   },
+   "type": "assistant",
+   "agent": "fixer",
+   "model": {
+    "id": "claude-haiku-5-5",
+    "providerID": "anthropic"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Mountains rise above the clouds, their peaks crowned in snow that glows at dawn. Their ancient slopes stand silent, holding the patient weight of centuries."
+    }
+   ],
+   "snapshot": {
+    "start": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "end": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "end_turn",
+   "cost": 0.000252445,
+   "tokens": {
+    "input": 4,
+    "output": 57,
+    "reasoning": 0,
+    "cache": {
+     "read": 21417,
+     "write": 75
+    }
+   }
+  },
+  {
+   "id": "msg_15e091176001ruvWO0pZ2oF10x",
+   "time": {
+    "created": 1792579015047
+   },
+   "text": "Now write two short sentences about mountains.",
+   "type": "user"
+  },
+  {
+   "id": "msg_15e090b14001QiPBUCKlYXmgH1",
+   "time": {
+    "created": 1792579013396
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_15e0904c4001Iw8YL88TrHE6DT",
+   "time": {
+    "created": 1792579011787,
+    "streamed": 1792579013345,
+    "completed": 1792579013393
+   },
+   "type": "assistant",
+   "agent": "fixer",
+   "model": {
+    "id": "claude-haiku-5-5",
+    "providerID": "anthropic"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "The sea stretches endlessly under a restless sky, its waves rolling in with a steady rhythm. Salt spray drifts on the wind as gulls circle above the rising tide."
+    }
+   ],
+   "snapshot": {
+    "start": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "end": "788a60532bd66fe194b79f3944606cef6b68b891",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "end_turn",
+   "cost": 0.00025423000000000004,
+   "tokens": {
+    "input": 4,
+    "output": 60,
+    "reasoning": 0,
+    "cache": {
+     "read": 21333,
+     "write": 84
+    }
+   }
+  },
+  {
+   "id": "msg_15e0904b3001YDUQyVbt4khwmF",
+   "time": {
+    "created": 1792579011775
+   },
+   "text": "Write two short sentences about the sea.",
+   "type": "user"
+  }
+ ],
+ "cursor": {
+  "previous": "eyJpZCI6Im1zZ18xNWUwOTJhNDQwMDFYaGw2MmlkQWVMRFFqciIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6InByZXZpb3VzIn0",
+  "next": "eyJpZCI6Im1zZ18xNWUwOTA0YjMwMDFZRFVReVZidDRraHdtRiIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6Im5leHQifQ"
+ }
+}

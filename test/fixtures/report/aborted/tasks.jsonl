@@ -1,0 +1,4 @@
+{"ts":"2026-10-21T20:05:00.000Z","id":"phase:build","repo":"_run","branch":"-","worktree":"-","state":"running","attempt":0,"phase":"build"}
+{"ts":"2026-10-21T20:10:00.000Z","id":"api","repo":"acme-api","branch":"feat/api-endpoint","worktree":"/fake/acme-api/.worktrees/budget-run/api","state":"blocked","attempt":2,"verify":[{"cmd":"go test ./...","exit":2}],"oracleVerdict":"rejected: new migration not allowed","blockedReason":"Oracle rejected D5 decision D-1 (DB migration)","phase":"build"}
+{"ts":"2026-10-21T20:46:00.000Z","id":"docs","repo":"acme-api","branch":"feat/docs","worktree":"/fake/acme-api/.worktrees/budget-run/docs","state":"blocked","attempt":1,"blockedReason":"wind-down: unfinished at soft stop","phase":"build"}
+{"ts":"2026-10-21T20:46:00.000Z","id":"metrics","repo":"acme-api","branch":"feat/metrics","worktree":"/fake/acme-api/.worktrees/budget-run/metrics","state":"skipped","attempt":0,"phase":"build"}

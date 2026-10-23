@@ -1,0 +1,166 @@
+# sandbox-exec live check (T4 acceptance 3). Profile rendered by src/sandbox.ts renderSandboxProfile() with
+#   home=/Users/alice work=/Users/alice/work port=49555 (a throwaway port; the "run server" is a node net server)
+#   tmpDir=<opencode tmp>/sbx/tmp xdgDataHome=~/Library/Application Support/nightgem/profile-live/xdg-data
+# Commands are `sandbox-exec -f p.sb <cmd>`; the control runs without the sandbox.
+# Finding: SBPL accepts only `*` or `localhost` as the remote host. `(remote ip "127.0.0.1:PORT")` is a syntax error
+#   ("host must be * or localhost in network address"), so the profile has the single localhost rule, which blocks 127.0.0.1 too.
+# Result summary: write outside allowlist BLOCKED (EPERM); write under ~/work/.specs/ng-spike/ ALLOWED;
+#   connect to the run port BLOCKED (EPERM) for 127.0.0.1 and localhost and curl; connect to another local port ALLOWED;
+#   symlink-escape write BLOCKED.
+#
+$ sandbox-exec -f p.sb /bin/echo ok
+ok
+listening 49555
+--- control: connect to run port OUTSIDE sandbox
+CONNECTED 127.0.0.1 49555
+hello-from-run-port
+--- inside sandbox: connect 127.0.0.1:49555
+CONNECT-ERROR 127.0.0.1 49555 EPERM connect EPERM 127.0.0.1:49555 - Local (0.0.0.0:0)
+--- inside sandbox: connect localhost:49555
+CONNECT-ERROR localhost 49555 EPERM 
+--- inside sandbox: curl 127.0.0.1:49555
+curl: (7) Failed to connect to 127.0.0.1 port 49555 after 0 ms: Couldn't connect to server
+curl exit=7
+--- inside sandbox: connect to a DIFFERENT local port (should work: control server on 49556)
+listening 49556
+CONNECTED 127.0.0.1 49556
+hello-from-run-port
+--- write outside allowlist (/tmp/ng-sbx-outside.txt)
+/bin/sh: /tmp/ng-sbx-outside.txt: Operation not permitted
+exit=1
+ls: /tmp/ng-sbx-outside.txt: No such file or directory
+--- write to $HOME outside allowlist
+/bin/sh: ~/ng-sbx-outside.txt: Operation not permitted
+exit=1
+ls: ~/ng-sbx-outside.txt: No such file or directory
+--- write inside ~/work/.specs/ng-spike/
+exit=0
+hi
+--- write inside run tmp
+exit=0
+hi
+--- symlink escape: ln -s /tmp link in work then write through it
+/bin/sh: ~/work/.specs/ng-spike/sbx-link/ng-sbx-link.txt: Operation not permitted
+exit=1
+ls: /tmp/ng-sbx-link.txt: No such file or directory
+
+# --- rendered profile (p.sb)
+;; nightgem write boundary: everything readable/executable, writes only under the allowlist,
+;; and no outbound connections to the run server (agents must not call the run API).
+(version 1)
+(allow default)
+(deny file-write*)
+(allow file-write*
+  (subpath "/Users/alice/work")
+  (subpath "<sbx>/tmp")
+  (subpath "/Users/alice/Library/Application Support/nightgem/profile-live/xdg-data")
+  (subpath "/Users/alice/.cache")
+  (subpath "/Users/alice/.npm")
+  (subpath "/Users/alice/Library/Caches")
+  (subpath "/Users/alice/go/pkg/mod")
+  (subpath "/Users/alice/Library/Logs")
+  (literal "/dev/null") (literal "/dev/zero") (literal "/dev/dtracehelper")
+  (regex #"^/dev/(tty|ttys[0-9]+|fd/[0-9]+)$"))
+(deny network-outbound (remote ip "localhost:49555"))
+
+# --- live preflight under the sandbox (opencode 2.0.29 + slim 3.0.4), run once by the profile lane
+# `opencode serve` was started under `sandbox-exec -f p.sb` with OPENCODE_CONFIG_CONTENT = renderRunConfig().configContentJson,
+# the guard package dir in plugins, an isolated XDG_DATA_HOME, then preflightRules() ran against the live GET /api/agent
+# plus POST /api/session/:id/permission using profile/corpus.txt x 6 agents:
+#   agents registered: orchestrator,build,compaction,title,summary,plan,explorer,librarian,oracle,designer,fixer
+#   PREFLIGHT ok=true evaluated=696 failures=0
+#   slim override applied: orchestrator model = anthropic/claude-haiku-5-5 (variant "high" carried over from the preset)
+# So the server starts and registers slim under the sandbox with the localhost:<port> network deny in place.
+
+# ---- file-read* deny for credential locations (2026-10-21)
+# Profile rendered by src/sandbox.ts renderSandboxProfile() with home=/Users/alice (adds `(deny file-read*` for
+#   ~/.aws ~/.config/gcloud ~/.kube ~/.docker ~/.config/gh ~/Library/Keychains (subpath), ~/.netrc ~/.git-credentials (literal)).
+# Commands run as `sandbox-exec -f p.sb <cmd>`. Only exit codes and byte counts are recorded, never file contents.
+# Result: all denied paths fail with EPERM ("Operation not permitted"); ~/.config/opencode/oh-my-opencode-slim.json stays readable,
+#   ~/.ssh stays listable (git fetch needs it), git ls-remote over the network, curl TLS and node fetch still work
+#   (so denying ~/Library/Keychains does not break TLS trust evaluation).
+# opencode.json stays readable by the kernel on purpose (the server reads it at runtime): the guard blocks agent shell reads of it.
+# control (no sandbox): cat ~/.aws/config -> exit=0 stdout_bytes=289
+$ DENIED? cat ~/.aws/config: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/.aws/config: Operation not permitted '
+$ DENIED? cat ~/.kube/config: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/.kube/config: Operation not permitted '
+$ DENIED? cat ~/.docker/desktop-build/.lock: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/.docker/desktop-build/.lock: Operation not permitted '
+$ DENIED? cat ~/.config/gh/config.yml: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/.config/gh/config.yml: Operation not permitted '
+$ DENIED? cat ~/.config/gcloud/configurations/config_default: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/.config/gcloud/configurations/config_default: Operation not permitted '
+$ DENIED? cat ~/Library/Keychains/login.keychain-db: exit=1 stdout_bytes=0 stderr='cat: /Users/alice/Library/Keychains/login.keychain-db: Operation not permitted '
+$ DENIED? ls ~/.aws: exit=1 stdout_bytes=0 stderr='ls: /Users/alice/.aws: Operation not permitted '
+$ ALLOWED node readFileSync ~/.config/opencode/oh-my-opencode-slim.json: exit=0 stdout_bytes=16 stderr=''
+$ ALLOWED wc -c ~/.config/opencode/opencode.json (kernel cannot block; server needs it): exit=0 stdout_bytes=9 stderr=''
+$ ALLOWED ls ~/.ssh: exit=0 stdout_bytes=216 stderr=''
+$ ALLOWED git -C ~/work/acme-web ls-remote --heads origin master: exit=0 stdout_bytes=59 stderr=''
+$ ALLOWED curl https TLS: exit=0 stdout_bytes=3 stderr=''
+$ ALLOWED node fetch https: exit=0 stdout_bytes=11 stderr=''
+
+# ---- also deny file-read* on ~/.local/share/opencode; server, go and npm under the profile
+# Profile as above plus `(subpath "/Users/alice/.local/share/opencode")`; the run uses its own XDG_DATA_HOME, so the
+# global auth/db is never needed. Exit codes and byte counts only.
+# Live run server under the rendered profile (`sandbox-exec -f p.sb opencode serve`, own XDG_DATA_HOME, port 49777, minimal env):
+#   GET /api/agent -> 200 (server starts and answers with ~/.local/share/opencode denied). It created <XDG_DATA_HOME>/opencode/{log,
+#   opencode.db,repos,shell}; tool-output/ is created lazily on the first truncated tool result. Path confirmed in the 2.0.29 binary
+#   (`path.join(<data>, "tool-output")`, entries `tool_<id>`, where <data> = $XDG_DATA_HOME/opencode) and by the user's own
+#   ~/.local/share/opencode/tool-output/tool_* files.
+$ DENIED? wc -c ~/.local/share/opencode/opencode.db: exit=1 stdout_bytes=0 stderr='/bin/sh: /Users/alice/.local/share/opencode/opencode.db: Operation not permitted '
+$ DENIED? ls ~/.local/share/opencode: exit=1 stdout_bytes=0 stderr='ls: /Users/alice/.local/share/opencode: Operation not permitted '
+$ go mod download (networked, go.sum present, fresh GOMODCACHE in tmp): exit=0 stdout_bytes=0 stderr=''
+$ go list -m all: exit=0 stdout_bytes=47 stderr=''
+$ npm ci (1 dep): exit=0 stdout_bytes=26 stderr=''
+$ node_modules/is-number present: exit=0 stdout_bytes=0 stderr=''
+# go/npm notes: the Go module was `require github.com/google/uuid v1.6.0`; both projects lived under the run tmp dir, GOMODCACHE in tmp.
+#   `go mod download` also exits 0 without a go.sum (sumdb verification works), with and without the file-read* denies (checked with a
+#   profile lacking that block). A first attempt with GOMODCACHE outside the write allowlist failed on sumdb, which was a test mistake.
+
+# ---- file-read* deny on ~/.ssh and a configured credential dir (~/.config/some-tool) (2026-10-21), and (deny network-outbound (remote ip "*:22"))
+# Profile rendered by src/sandbox.ts renderSandboxProfile() with home=/Users/alice (adds `(subpath ~/.ssh)` and `(subpath ~/.config/some-tool)`
+#   to the file-read* deny, and `(deny network-outbound (remote ip "*:22"))` next to the run-port rule). `"*:22"` is valid SBPL (host `*`
+#   covers every host including localhost). Commands run as `sandbox-exec -f p.sb <cmd>`; exit codes only, no file contents recorded.
+# control (no sandbox): node net.connect github.com:22 -> exit=0; nc -z github.com 22 -> exit=0; ssh -o BatchMode=yes -T git@github.com -> exit=1
+#   (GitHub's "authenticated, no shell" code, i.e. the keys DO work outside the sandbox); cat ~/.ssh/config -> exit=0; ls ~/.config/some-tool -> exit=0
+$ DENIED? node net.connect github.com:22: exit=1 (EPERM)
+$ DENIED? node net.connect localhost:22: exit=1 (EPERM)
+$ DENIED? node net.connect 127.0.0.1:22: exit=1 (EPERM)
+$ DENIED? nc -z -G 5 github.com 22: exit=1
+$ DENIED? ssh -o BatchMode=yes -T git@github.com: exit=255
+$ DENIED? ssh -F /dev/null -o BatchMode=yes -o IdentityFile=/dev/null -T git@github.com (port 22 alone, no key involved): exit=255
+$ DENIED? cat ~/.ssh/config: exit=1
+$ DENIED? ls ~/.ssh: exit=1
+$ DENIED? ls ~/.config/some-tool: exit=1
+$ DENIED? git ls-remote git@github.com:octocat/Hello-World.git (ssh transport): exit=128
+$ ALLOWED curl -s https://example.com: exit=0
+$ ALLOWED node fetch https://example.com: exit=0
+$ ALLOWED git ls-remote https://github.com/octocat/Hello-World.git master (public, https): exit=0
+$ ALLOWED git -C <worktree> status --short: exit=0
+$ DENIED? sh -c 'echo x > /tmp/sbx-x' (write boundary unchanged): exit=1
+# a logged-in tracker CLI (~/.local/bin/some-tool; its login lives in ~/.config/some-tool/auth.conf): usable outside, dead inside
+$ control (no sandbox) some-tool user search a -o json: exit=0
+$ DENIED? some-tool user search a -o json: exit=1
+$ DENIED? some-tool --help: exit=1
+
+# ---- host-control exec deny (2026-10-21, macOS, opencode 2.0.29 host)
+# Profile line added by renderSandboxProfile():
+#   (deny process-exec (literal "/bin/launchctl") (literal "/usr/bin/osascript") (literal "/usr/bin/crontab"))
+# Same rendered profile as above (home/work/port 49555), `sandbox-exec -f p.sb <cmd>`, no opencode server involved.
+$ sandbox-exec -f p.sb /bin/launchctl list
+sandbox-exec: execvp() of '/bin/launchctl' failed: Operation not permitted
+exit=71
+$ sandbox-exec -f p.sb /usr/bin/osascript -e 1
+sandbox-exec: execvp() of '/usr/bin/osascript' failed: Operation not permitted
+exit=71
+$ sandbox-exec -f p.sb /usr/bin/crontab -l
+sandbox-exec: execvp() of '/usr/bin/crontab' failed: Operation not permitted
+exit=71
+$ sandbox-exec -f p.sb /bin/sh -c '/bin/launchctl list'
+/bin/sh: /bin/launchctl: Operation not permitted
+exit=126
+# a copy of launchctl made inside the write allowlist is killed by the kernel (code signature), exit 137 (SIGKILL):
+$ sandbox-exec -f p.sb /bin/sh -c 'cp /bin/launchctl $TMP/lc; $TMP/lc list'
+Killed: 9
+exit=137
+# the toolchain still works inside the same sandbox
+$ sandbox-exec -f p.sb node -v          -> v24.4.1          exit=0
+$ sandbox-exec -f p.sb /usr/bin/git --version -> git version 2.39.5 (Apple Git-154)   exit=0
+$ sandbox-exec -f p.sb npm -v           -> 11.4.2           exit=0
+# control, without the sandbox: /bin/launchctl list exit=0, /usr/bin/crontab -l exit=0

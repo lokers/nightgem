@@ -1,0 +1,5 @@
+shell|echo hi > /tmp/outside-spike2.txt
+shell|echo hi | tee /tmp/outside-spike3.txt
+shell|echo hi >> ~/outside-spike4.txt
+shell|echo hi > /Users/alice/work/.specs/ng-spike/rec/ok-redirect.txt
+shell|ln -sfn /tmp /Users/alice/work/.specs/ng-spike/rec/linkout && echo hi > /Users/alice/work/.specs/ng-spike/rec/linkout/outside-spike5.txt

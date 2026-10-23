@@ -1,0 +1,45 @@
+{
+ "global": {
+  "location": {
+   "directory": "/Users/alice/work/.specs/ng-spike/.run"
+  },
+  "data": [
+   {
+    "id": "per_15e065fc7001yHSJA6FhCy0ExE",
+    "sessionID": "ses_ea1f9a615ffecwY3BqDvNZCgWV",
+    "action": "shell",
+    "resources": [
+     "echo hello-from-spike"
+    ],
+    "save": [
+     "echo *"
+    ],
+    "source": {
+     "type": "tool",
+     "messageID": "msg_15e065a6e001hW0Vr6khPLyLsn",
+     "id": "toolu_bdrk_01Dt3N6AHyq6XkZ258V8jJne"
+    }
+   }
+  ]
+ },
+ "session": {
+  "data": [
+   {
+    "id": "per_15e065fc7001yHSJA6FhCy0ExE",
+    "sessionID": "ses_ea1f9a615ffecwY3BqDvNZCgWV",
+    "action": "shell",
+    "resources": [
+     "echo hello-from-spike"
+    ],
+    "save": [
+     "echo *"
+    ],
+    "source": {
+     "type": "tool",
+     "messageID": "msg_15e065a6e001hW0Vr6khPLyLsn",
+     "id": "toolu_bdrk_01Dt3N6AHyq6XkZ258V8jJne"
+    }
+   }
+  ]
+ }
+}

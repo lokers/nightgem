@@ -1,0 +1,68 @@
+{
+  "name": "nightgem",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Human-written spec, then an autonomous, budget-capped, sandboxed overnight build driven through a dedicated opencode serve (macOS)",
+  "license": "MIT",
+  "author": "nightgem contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lokers/nightgem.git"
+  },
+  "homepage": "https://github.com/lokers/nightgem#readme",
+  "bugs": {
+    "url": "https://github.com/lokers/nightgem/issues"
+  },
+  "keywords": [
+    "opencode",
+    "oh-my-opencode-slim",
+    "agents",
+    "autonomous",
+    "spec-driven",
+    "macos",
+    "launchd",
+    "sandbox"
+  ],
+  "type": "module",
+  "bin": {
+    "nightgem": "bin/nightgem.mjs"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "profile",
+    "prompts",
+    "commands",
+    "templates",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "os": [
+    "darwin"
+  ],
+  "scripts": {
+    "cli": "tsx src/cli.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "pack:check": "node scripts/check-pack.mjs",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "execa": "^10.2.0",
+    "jsonc-parser": "^3.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

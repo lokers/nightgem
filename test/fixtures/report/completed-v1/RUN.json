@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "slug": "demo-feature",
+  "budgetUsd": 20,
+  "state": "completed",
+  "phase": "report",
+  "launchdLabel": "dev.nightgem.demo-feature",
+  "controlDir": "/fake/control/demo-feature",
+  "runDir": "/fake/.specs/demo-feature/.run",
+  "xdgDataHome": "/fake/control/demo-feature/xdg-data",
+  "model": "anthropic/claude-sonnet-5-5",
+  "costUsd": 8.5,
+  "costEstimatedUsd": 0.5,
+  "repos": [
+    {
+      "name": "acme-api",
+      "path": "/fake/acme-api",
+      "defaultBranch": "master",
+      "baseline": {
+        "head": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "branch": "master",
+        "porcelainHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stashCount": 1
+      }
+    },
+    {
+      "name": "acme-web",
+      "path": "/fake/acme-web",
+      "defaultBranch": "master",
+      "baseline": {
+        "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "branch": "feature-x",
+        "porcelainHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "stashCount": 0
+      }
+    }
+  ],
+  "worktrees": [
+    {
+      "repo": "acme-api",
+      "path": "/fake/acme-api/.worktrees/demo-feature/api",
+      "branch": "feat/api-endpoint",
+      "task": "api",
+      "kind": "task"
+    },
+    {
+      "repo": "acme-web",
+      "path": "/fake/acme-web/.worktrees/demo-feature/ui",
+      "branch": "feat/ui-page",
+      "task": "ui",
+      "kind": "task"
+    },
+    {
+      "repo": "acme-api",
+      "path": "/fake/acme-api/.worktrees/demo-feature/_integration",
+      "branch": "feat/demo-feature-integration",
+      "kind": "integration"
+    }
+  ],
+  "createdAt": "2026-10-21T20:00:00.000Z",
+  "startedAt": "2026-10-21T20:05:00.000Z",
+  "endedAt": "2026-10-21T22:35:30.000Z",
+  "stopReason": "run.complete",
+  "defects": []
+}

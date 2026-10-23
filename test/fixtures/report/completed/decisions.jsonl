@@ -1,0 +1,2 @@
+{"ts":"2026-10-21T20:30:00.000Z","id":"D-1","kind":"plan","summary":"Split work into api and ui","rationale":"No overlapping file ownership","needsHumanAttention":false}
+{"ts":"2026-10-21T21:10:00.000Z","id":"D-2","kind":"dependency","summary":"Add dependency zod-to-openapi","rationale":"Needed for schema export","oracleApproved":true,"needsHumanAttention":true}

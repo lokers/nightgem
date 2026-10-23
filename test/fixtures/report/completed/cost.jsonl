@@ -1,0 +1,6 @@
+{"ts":"2026-10-21T20:20:00.000Z","sessionId":"ses_plan","parentId":null,"phase":"plan","costUsd":1,"estimated":false,"source":"session-info","totalUsd":1}
+{"ts":"2026-10-21T20:40:00.000Z","sessionId":"ses_plan","parentId":null,"phase":"plan","costUsd":1.5,"estimated":false,"source":"session-info","totalUsd":1.5}
+{"ts":"2026-10-21T21:00:00.000Z","sessionId":"ses_build","parentId":null,"phase":"build","costUsd":3,"estimated":false,"source":"session-info","totalUsd":4.5}
+{"ts":"2026-10-21T21:20:00.000Z","sessionId":"ses_fixer","parentId":"ses_build","phase":"build","costUsd":2,"estimated":true,"source":"estimate","totalUsd":6.5}
+{"ts":"2026-10-21T22:00:00.000Z","sessionId":"ses_build","parentId":null,"phase":"build","costUsd":4.5,"estimated":false,"source":"session-info","totalUsd":8}
+{"ts":"2026-10-21T22:30:00.000Z","sessionId":"ses_review","parentId":null,"phase":"review","costUsd":0.5,"estimated":false,"source":"session-info","totalUsd":8.5}
