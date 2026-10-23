@@ -5,7 +5,7 @@ import { delimiter, dirname, isAbsolute, join } from 'node:path';
 
 import { findNodeAtLocation, getNodeValue, parseTree } from 'jsonc-parser';
 
-import { cliInvocation, type DoctorCheck, type ExecFn } from './cli-deps.ts';
+import { CLI_BIN_PATH, cliInvocation, type DoctorCheck, type ExecFn } from './cli-deps.ts';
 import type { RunContextSnapshot } from './contracts.ts';
 import { detectSkills, type SkillDetectionResult, type SkillsFs } from './skills.ts';
 import { loadProfile, ProfileError, resolveProfilePath, type LoadedProfile, type ProfileEnv, type ProfileFs } from './userprofile.ts';
@@ -25,6 +25,8 @@ export interface DoctorFs {
   exists(path: string): boolean;
   /** File contents, or undefined when it cannot be read. Needed for the toolchain check (package.json scripts). */
   readText?(path: string): string | undefined;
+  /** Resolve symlinks. Needed for the `cli on PATH` check; without it a path stands for itself. */
+  realpath?(path: string): string | undefined;
 }
 
 export interface DoctorOptions {
@@ -47,6 +49,13 @@ export interface DoctorOptions {
   lockIsFree?: () => Promise<boolean>;
   /** Spec repos of the run to launch. When given, each repo's verify tools are checked (warnings only). */
   specRepos?: ReadonlyArray<{ name: string; path: string }>;
+  /**
+   * The environment of the user's shell. When given, the soft `cli on PATH` check resolves `nightgem` on ITS `PATH`
+   * (not the launchd job PATH). Without it the check is skipped.
+   */
+  env?: Readonly<Record<string, string | undefined>>;
+  /** Absolute `bin/nightgem.mjs` of this checkout, compared with what `nightgem` on the PATH resolves to. Default: this checkout's. */
+  cliBinPath?: string;
   /** The PATH the job will run with (NOT the caller's). Required with `specRepos`. */
   jobPath?: string;
   /** Profile `repos` (name -> tools). A repo listed here is checked for these tools in addition to the generic defaults. */
@@ -128,6 +137,36 @@ export function toolchainChecks(
       ? { name, ok: true, hard: false, detail: `${[...need].join(', ')} found on the job PATH` }
       : { name, ok: false, hard: false, detail: `not on the job PATH: ${missing.join(', ')} (verify steps that need them will fail)` };
   });
+}
+
+/** The command name the link provides (`bin` in package.json). */
+const BIN_NAME = 'nightgem';
+
+/**
+ * Soft check: does `nightgem` on the user's shell PATH resolve to THIS checkout? Pure lookup (a PATH walk plus realpath), no
+ * process is spawned. Missing and stale links both warn with the exact fix; the slash commands work without the link.
+ */
+export function cliOnPathCheck(input: { env: Readonly<Record<string, string | undefined>>; fs: DoctorFs; cliBinPath: string }): DoctorCheck {
+  const name = 'cli on PATH';
+  const real = (p: string): string => input.fs.realpath?.(p) ?? p;
+  const checkout = dirname(dirname(real(input.cliBinPath)));
+  const found = (input.env.PATH ?? '')
+    .split(delimiter)
+    .filter((dir) => dir !== '' && isAbsolute(dir))
+    .map((dir) => join(dir, BIN_NAME))
+    .find((candidate) => input.fs.exists(candidate));
+  if (found === undefined) {
+    return { name, ok: false, hard: false, detail: `${BIN_NAME} is not on the PATH (the slash commands still work). To add it, run \`npm link\` in ${checkout}` };
+  }
+  const target = real(found);
+  if (target === real(input.cliBinPath)) return { name, ok: true, hard: false, detail: `${BIN_NAME} -> ${checkout}` };
+  const other = /\/bin\/[^/]+$/.test(target) ? dirname(dirname(target)) : target;
+  return {
+    name,
+    ok: false,
+    hard: false,
+    detail: `${BIN_NAME} on the PATH resolves to ${other}, not this checkout. To fix it, run \`npm unlink -g ${BIN_NAME} && npm link\` in ${checkout}`,
+  };
 }
 
 export async function doctor(opts: DoctorOptions): Promise<DoctorResult> {
@@ -218,6 +257,8 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorResult> {
     }),
   );
 
+  if (opts.env) checks.push(cliOnPathCheck({ env: opts.env, fs, cliBinPath: opts.cliBinPath ?? CLI_BIN_PATH }));
+
   if (opts.specRepos && opts.jobPath !== undefined) checks.push(...toolchainChecks(opts.specRepos, opts.jobPath, fs, opts.repoTools));
 
   if (opts.preflight) {
@@ -232,10 +273,39 @@ export async function doctor(opts: DoctorOptions): Promise<DoctorResult> {
   return { checks };
 }
 
-export function formatDoctor(result: DoctorResult): string {
+/** The longest default doctor line (and launch warning), in characters. */
+export const MAX_LINE = 200;
+const VERBOSE_HINT = ' ... (run `doctor --verbose` for the full text)';
+
+/** A check that carries a one-line `summary`, used in place of a `detail` that does not fit. Extra field: other code ignores it. */
+type SummarizedCheck = DoctorCheck & { summary?: string };
+const withSummary = (check: DoctorCheck, summary: string): DoctorCheck => ({ ...check, summary }) as SummarizedCheck;
+
+/**
+ * `<prefix><detail>` as ONE line of at most MAX_LINE characters. The full detail when it fits, else the check's summary,
+ * else the first line cut short with a pointer to `--verbose`. With `verbose` the detail is printed as is.
+ */
+export function compactLine(prefix: string, check: DoctorCheck, verbose = false): string {
+  const detail = check.detail;
+  if (verbose) return `${prefix}${detail}`;
+  const fits = (text: string): boolean => !text.includes('\n') && prefix.length + text.length <= MAX_LINE;
+  if (fits(detail)) return `${prefix}${detail}`;
+  const summary = (check as SummarizedCheck).summary;
+  if (summary !== undefined && fits(summary)) return `${prefix}${summary}`;
+  const first = (summary ?? detail).split('\n')[0] ?? '';
+  const room = Math.max(0, MAX_LINE - prefix.length - VERBOSE_HINT.length);
+  return `${prefix}${first.slice(0, room).trimEnd()}${VERBOSE_HINT}`;
+}
+
+export function formatDoctor(result: DoctorResult, opts: { verbose?: boolean } = {}): string {
   return result.checks
-    .map((c) => `${c.ok ? 'ok  ' : c.hard ? 'FAIL' : 'warn'}  ${c.name}: ${c.detail}`)
+    .map((c) => compactLine(`${c.ok ? 'ok  ' : c.hard ? 'FAIL' : 'warn'}  ${c.name}: `, c, opts.verbose))
     .join('\n');
+}
+
+/** The `warning: ...` line `launch` prints for a failed soft check: always compact. */
+export function formatWarning(check: DoctorCheck): string {
+  return compactLine(`warning: ${check.name}: `, check);
 }
 
 // ---------------------------------------------------------------------------
@@ -255,7 +325,7 @@ export interface EnvironmentInput {
 }
 
 export interface SlimStatus {
-  status: 'ok' | 'absent' | 'wrong-major' | 'unknown';
+  status: 'ok' | 'absent' | 'wrong-major' | 'uncached' | 'unknown';
   /** Package version when determined. */
   version?: string;
   detail: string;
@@ -331,7 +401,7 @@ export function detectSlim(input: { home: string; fs: EnvironmentFs }): SlimStat
   if (entry === undefined) return { status: 'absent', detail: `${SLIM_PACKAGE} is not in the "plugin" list of ${file} (install it: see the README prerequisites)` };
   const specVersion = entry.includes('@') ? entry.slice(entry.indexOf('@') + 1) : undefined;
   const version = cachedSlimVersion(home, specVersion, fs) ?? (specVersion && SEMVER_RE.test(specVersion) ? specVersion : undefined);
-  if (version === undefined) return { status: 'unknown', detail: `${entry} is configured but its installed version could not be determined (not in the opencode cache yet?)` };
+  if (version === undefined) return { status: 'uncached', detail: `${entry} is configured but not in OpenCode's cache. Start OpenCode once (the TUI, or \`opencode run "hi"\`) so it downloads the plugin, then rerun doctor` };
   const major = Number(version.split('.')[0]);
   if (major !== EXPECTED_SLIM_MAJOR) {
     return { status: 'wrong-major', version, detail: `${SLIM_PACKAGE} ${version} found, major ${EXPECTED_SLIM_MAJOR} required` };
@@ -342,6 +412,7 @@ export function detectSlim(input: { home: string; fs: EnvironmentFs }): SlimStat
 export function slimCheck(status: SlimStatus): DoctorCheck {
   const name = 'oh-my-opencode-slim';
   if (status.status === 'ok') return { name, ok: true, hard: false, detail: status.detail };
+  // 'uncached' is hard: the sandboxed run server cannot download the plugin, so the launch would fail later with missing agents
   if (status.status === 'unknown') return { name, ok: false, hard: false, detail: status.detail };
   return { name, ok: false, hard: true, detail: status.detail };
 }
@@ -351,7 +422,9 @@ export function profileErrorCheck(err: ProfileError): DoctorCheck {
   const name = 'profile';
   if (err.code === 'missing') return { name, ok: false, hard: true, detail: `no profile at ${err.path}. Create one with: ${installHint()}` };
   if (err.code === 'invalid-workspace') {
-    return { name, ok: false, hard: true, detail: `${err.path}: workspaceRoot rejected:\n${(err.reasons ?? []).map((r) => `  - ${r}`).join('\n')}` };
+    const reasons = err.reasons ?? [];
+    const check: DoctorCheck = { name, ok: false, hard: true, detail: `${err.path}: workspaceRoot rejected:\n${reasons.map((r) => `  - ${r}`).join('\n')}` };
+    return withSummary(check, `${err.path}: workspaceRoot rejected: ${reasons.join('; ')}`);
   }
   return { name, ok: false, hard: true, detail: err.message };
 }
@@ -381,23 +454,37 @@ export function skillChecks(det: SkillDetectionResult): DoctorCheck[] {
     const parts: string[] = [];
     if (missing.length > 0) parts.push(`missing: ${missing.join(', ')}`);
     if (excludedReq.size > 0) parts.push(`excluded by the profile (skills.exclude): ${[...excludedReq].join(', ')}`);
-    checks.push({ name, ok: false, hard: true, detail: `${parts.join('; ')}. Install with: ${SKILLS_HINT}` });
+    const check: DoctorCheck = { name, ok: false, hard: true, detail: `${parts.join('; ')}. Install with: ${SKILLS_HINT}` };
+    const shown = missing.slice(0, 3).join(', ') + (missing.length > 3 ? ', ...' : '');
+    checks.push(withSummary(check, `${missing.length + excludedReq.size} required skills missing or excluded${shown ? ` (${shown})` : ''}. Install with: ${SKILLS_HINT}`));
   }
   if (det.collisions.length > 0) {
-    checks.push({
-      name: 'skill name collisions',
-      ok: false,
-      hard: false,
-      detail: det.collisions.map((c) => `${c.name} (${c.paths.join(' vs ')}; the first wins)`).join('; '),
-    });
+    const n = det.collisions.length;
+    checks.push(
+      withSummary(
+        {
+          name: 'skill name collisions',
+          ok: false,
+          hard: false,
+          detail: det.collisions.map((c) => `${c.name} (${c.paths.join(' vs ')}; the first wins)`).join('; '),
+        },
+        `${n} skill name${n === 1 ? '' : 's'} collide (the first root wins); run \`doctor --verbose\` for the list`,
+      ),
+    );
   }
   if (det.rootRejected.length > 0) {
-    checks.push({
-      name: 'skill roots rejected',
-      ok: false,
-      hard: false,
-      detail: det.rootRejected.map((r) => `${r.root}: ${r.reasons.join(', ')}`).join('; '),
-    });
+    const n = det.rootRejected.length;
+    checks.push(
+      withSummary(
+        {
+          name: 'skill roots rejected',
+          ok: false,
+          hard: false,
+          detail: det.rootRejected.map((r) => `${r.root}: ${r.reasons.join(', ')}`).join('; '),
+        },
+        `${n} skill root${n === 1 ? '' : 's'} rejected (not scanned); run \`doctor --verbose\` for the list`,
+      ),
+    );
   }
   return checks;
 }
@@ -447,7 +534,8 @@ export function ancestorConfigCheck(workspaceRoot: string, fs: Pick<SkillsFs, 'e
     if (parent === dir) break;
     dir = parent;
   }
-  return { name: 'no ancestor opencode config', ok: found.length === 0, hard: true, detail: found.length === 0 ? 'none above the run dir' : `found: ${found.join(', ')}` };
+  const check: DoctorCheck = { name: 'no ancestor opencode config', ok: found.length === 0, hard: true, detail: found.length === 0 ? 'none above the run dir' : `found: ${found.join(', ')}` };
+  return found.length === 0 ? check : withSummary(check, `${found.length} opencode config(s) above the run dir, first: ${found[0]}; run \`doctor --verbose\` for the list`);
 }
 
 export interface EnvironmentResult {

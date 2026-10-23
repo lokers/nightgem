@@ -12,13 +12,20 @@ import { ProfileError } from '../src/userprofile.ts';
 
 import {
   ancestorConfigCheck,
+  cliOnPathCheck,
+  compactLine,
   detectSlim,
+  formatDoctor,
+  formatWarning,
+  MAX_LINE,
+  skillChecks,
   slimCheck,
   doctor,
   environmentChecks,
   hardFailures,
   hasHardFailure,
   profileCheck,
+  profileErrorCheck,
   readPluginSpecs,
   toolchainChecks,
   trackerChecks,
@@ -365,10 +372,21 @@ describe('environment checks (explicit home / env / fs)', () => {
       expect(check('oh-my-opencode-slim')).toMatchObject({ ok: false, hard: true });
     });
 
-    it('undeterminable (configured but not cached, no version in the spec): WARN, not FAIL', () => {
+    it('configured but not in the opencode cache (no version in the spec): a hard FAIL that names the fix', () => {
       writeOpencodeJson({ plugin: ['oh-my-opencode-slim'] });
+      expect(detectSlim({ home, fs: nodeFs }).status).toBe('uncached');
       writeProfile();
-      expect(check('oh-my-opencode-slim')).toMatchObject({ ok: false, hard: false });
+      const c = check('oh-my-opencode-slim')!;
+      expect(c).toMatchObject({ ok: false, hard: true });
+      expect(c.detail).toContain('opencode run "hi"');
+      expect(c.detail).toContain('rerun doctor');
+      // the whole default line stays compact, fix included
+      expect(formatDoctor({ checks: [c] })).toMatch(/^FAIL {2}oh-my-opencode-slim: .*rerun doctor$/);
+      expect(formatDoctor({ checks: [c] }).length).toBeLessThanOrEqual(MAX_LINE);
+    });
+
+    it('an unreadable opencode.json stays a soft "unknown"', () => {
+      expect(slimCheck({ status: 'unknown', detail: 'cannot read x' })).toMatchObject({ ok: false, hard: false });
     });
 
     it('a pinned spec that is not cached yet falls back to the spec version', () => {
@@ -478,3 +496,121 @@ describe('environment checks (explicit home / env / fs)', () => {
     });
   });
 });
+
+/** An in-memory PATH: files, and symlinks that realpath resolves (one level is enough here). */
+function fakePathFs(files: string[], links: Record<string, string> = {}) {
+  return {
+    exists: (p: string) => files.includes(p) || p in links,
+    realpath: (p: string) => links[p] ?? p,
+  };
+}
+
+describe('cli on PATH', () => {
+  const BIN = '/Users/alice/src/nightgem/bin/nightgem.mjs';
+  const CHECKOUT = '/Users/alice/src/nightgem';
+  const env = { PATH: '/usr/bin:/Users/alice/.npm/bin:/opt/bin' };
+  const check = (fsx: ReturnType<typeof fakePathFs>, e: Record<string, string> = env) => cliOnPathCheck({ env: e, fs: fsx, cliBinPath: BIN });
+
+  it('ok when nightgem on the PATH resolves (through the link) to this checkout', () => {
+    const c = check(fakePathFs([BIN], { '/Users/alice/.npm/bin/nightgem': BIN }));
+    expect(c).toMatchObject({ name: 'cli on PATH', ok: true, hard: false });
+    expect(c.detail).toContain(CHECKOUT);
+  });
+
+  it('missing: a soft warning that suggests npm link in this checkout', () => {
+    const c = check(fakePathFs([BIN]));
+    expect(c).toMatchObject({ ok: false, hard: false });
+    expect(c.detail).toContain(`\`npm link\` in ${CHECKOUT}`);
+    expect(check(fakePathFs([BIN]), {})).toMatchObject({ ok: false, hard: false });
+  });
+
+  it('stale: names the other checkout and suggests unlink then link', () => {
+    const other = '/Users/alice/old/nightgem/bin/nightgem.mjs';
+    const c = check(fakePathFs([BIN, other], { '/Users/alice/.npm/bin/nightgem': other }));
+    expect(c).toMatchObject({ ok: false, hard: false });
+    expect(c.detail).toContain('/Users/alice/old/nightgem');
+    expect(c.detail).toContain(`\`npm unlink -g nightgem && npm link\` in ${CHECKOUT}`);
+  });
+
+  it('uses the env PATH it is given, first match wins, relative entries are ignored', () => {
+    const other = '/Users/alice/old/nightgem/bin/nightgem.mjs';
+    const fsx = fakePathFs([BIN, other], { '/first/nightgem': other, '/Users/alice/.npm/bin/nightgem': BIN });
+    expect(check(fsx, { PATH: '/first:/Users/alice/.npm/bin' }).ok).toBe(false);
+    expect(check(fsx, { PATH: 'bin:/Users/alice/.npm/bin' }).ok).toBe(true);
+  });
+
+  it('doctor() runs it only when an env is given, as a soft check that never changes the verdict', async () => {
+    const base = { exec: fakeExec(), fs: fakePathFs([BIN]), workspaceRoot: WS, nodePath: '/n/node', lockIsFree: async () => true, cliBinPath: BIN };
+    expect((await doctor(base)).checks.some((c) => c.name === 'cli on PATH')).toBe(false);
+    const r = await doctor({ ...base, env });
+    expect(find(r, 'cli on PATH')).toMatchObject({ ok: false, hard: false });
+    expect(hasHardFailure(r)).toBe(hasHardFailure(await doctor(base)));
+  });
+});
+
+describe('compact output', () => {
+  const longPaths = (i: number): string[] => [`/Users/alice/work/some/long/skills/root/number-${i}/${'deep/'.repeat(8)}skill-${i}`, `/Users/alice/.agents/skills/${'nested/'.repeat(8)}skill-${i}`];
+  const detection = {
+    available: [],
+    collisions: Array.from({ length: 13 }, (_, i) => ({ name: `skill-${i}`, paths: longPaths(i) })),
+    missingRequired: [],
+    excludedRequired: [],
+    rootRejected: [],
+    outsideRoots: [],
+  } as never;
+
+  it('13 skill collisions with long paths become one summary line, in the default output only', () => {
+    const c = skillChecks(detection).find((x) => x.name === 'skill name collisions');
+    expect(c!.detail.length).toBeGreaterThan(MAX_LINE);
+    const lines = formatDoctor({ checks: [c!] }).split('\n');
+    expect(lines).toEqual(['warn  skill name collisions: 13 skill names collide (the first root wins); run `doctor --verbose` for the list']);
+    const verbose = formatDoctor({ checks: [c!] }, { verbose: true });
+    expect(verbose).toContain(c!.detail);
+    expect(verbose).toContain('skill-12');
+  });
+
+  it('caps every default line at MAX_LINE: long details, newlines, and long names are cut with a pointer to --verbose', () => {
+    const checks: DoctorCheck[] = [
+      { name: 'remote urls', ok: false, hard: true, detail: 'x'.repeat(900) },
+      { name: 'profile', ok: false, hard: true, detail: '/p/profile.jsonc: workspaceRoot rejected:\n  - a\n  - b' },
+      { name: 'tracker command', ok: true, hard: false, detail: `${'y'.repeat(300)} -> /bin/y` },
+      { name: 'short', ok: true, hard: false, detail: 'fine' },
+    ];
+    const lines = formatDoctor({ checks }).split('\n');
+    expect(lines).toHaveLength(checks.length);
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(MAX_LINE);
+    expect(lines[0]).toContain('run `doctor --verbose`');
+    expect(lines[1]).toContain('workspaceRoot rejected:');
+    expect(lines[1]).toContain('run `doctor --verbose`');
+    expect(lines[3]).toBe('ok    short: fine');
+    // verbose is the old, full output
+    const verbose = formatDoctor({ checks }, { verbose: true });
+    expect(verbose).toContain('x'.repeat(900));
+    expect(verbose).toContain('\n  - b');
+  });
+
+  it('a rejected workspace keeps its reasons on one line when they fit', () => {
+    const c = profileCheckForTest();
+    expect(formatDoctor({ checks: [c] })).toBe(`FAIL  profile: /p/profile.jsonc: workspaceRoot rejected: is the home directory; contains a symlink`);
+  });
+
+  it('launch warnings are capped too', () => {
+    const line = formatWarning({ name: 'remote pushurls', ok: false, hard: false, detail: 'z'.repeat(600) });
+    expect(line.length).toBeLessThanOrEqual(MAX_LINE);
+    expect(line.startsWith('warning: remote pushurls: ')).toBe(true);
+    expect(line).toContain('run `doctor --verbose`');
+    expect(formatWarning({ name: 'a', ok: false, hard: false, detail: 'short' })).toBe('warning: a: short');
+    expect(compactLine('p: ', { name: 'a', ok: false, hard: false, detail: 'k'.repeat(900) }, true)).toHaveLength(903);
+  });
+
+  it('exit semantics are untouched: hard failures are still the only blockers, however the lines are cut', () => {
+    const r = { checks: [{ name: 'a', ok: false, hard: false, detail: 'q'.repeat(500) }, { name: 'b', ok: false, hard: true, detail: 'q'.repeat(500) }] };
+    expect(hasHardFailure(r)).toBe(true);
+    expect(hardFailures(r).map((c) => c.name)).toEqual(['b']);
+    expect(hasHardFailure({ checks: [r.checks[0]!] })).toBe(false);
+  });
+});
+
+function profileCheckForTest(): DoctorCheck {
+  return profileErrorCheck(new ProfileError('invalid-workspace', '/p/profile.jsonc', 'rejected', { reasons: ['is the home directory', 'contains a symlink'] }));
+}

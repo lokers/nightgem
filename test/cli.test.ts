@@ -652,6 +652,49 @@ describe('doctor with a profile that lists repos', () => {
   });
 });
 
+describe('doctor output', () => {
+  const LONG = `/Users/alice/work/${'a-long-directory/'.repeat(20)}end`;
+  const preflight = async () => [
+    { name: 'remote urls', ok: true, hard: true, detail: `${LONG} ${LONG}` },
+    { name: 'skill name collisions', ok: false, hard: false, detail: `13 names ${LONG}` },
+    { name: 'multi', ok: true, hard: false, detail: 'first line\n  - second line' },
+  ];
+  async function run(args: string[], over: Partial<CliDeps> = {}, exec: ExecFn = makeExec()) {
+    const codes: number[] = [];
+    const program = buildProgram({ deps: makeDeps({ preflight, ...over }), exec, fs: { exists: (p) => !p.endsWith('/nightgem') }, io: io(), env: { PATH: '/usr/bin' }, onExit: (c) => void codes.push(c) });
+    await program.parseAsync(['doctor', ...args], { from: 'user' });
+    lines = lines.join('\n').split('\n');
+    return codes;
+  }
+
+  it('prints one line per check, each at most 200 characters, and soft findings exit 0', async () => {
+    const codes = await run([]);
+    expect(lines.length).toBeGreaterThan(5);
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(200);
+    expect(lines.some((l) => l.includes('multi: first line'))).toBe(true);
+    expect(lines.join('\n')).not.toContain('second line');
+    expect(lines.join('\n')).toContain('run `doctor --verbose`');
+    expect(lines.some((l) => l.startsWith('warn  cli on PATH: nightgem is not on the PATH'))).toBe(true);
+    expect(codes).toEqual([]);
+  });
+
+  it('--verbose prints the full detail', async () => {
+    await run(['--verbose']);
+    const out = lines.join('\n');
+    expect(out).toContain(`${LONG} ${LONG}`);
+    expect(out).toContain('first line\n  - second line');
+    expect(lines.some((l) => l.length > 200)).toBe(true);
+  });
+
+  it('a hard failure still exits 1, with or without --verbose, and a long soft one does not', async () => {
+    for (const args of [[], ['--verbose']]) {
+      lines = [];
+      expect(await run(args, {}, makeExec({ power: 'Battery Power' }))).toEqual([1]);
+      expect(lines.some((l) => l.startsWith('FAIL  AC power'))).toBe(true);
+    }
+  });
+});
+
 describe('profile commands', () => {
   let profilePath: string;
   let exitCodes: number[];

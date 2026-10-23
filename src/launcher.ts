@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 
 import { cliInvocation, type CliDeps, type ExecFn } from './cli-deps.ts';
 import { isNeverStartedFailure, isTerminalRunState, RUN_MANIFEST_VERSION, RunContextSnapshot, RunManifest, type RepoEntry } from './contracts.ts';
-import { doctor, formatDoctor, hardFailures, type DoctorFs, type DoctorOptions } from './doctor.ts';
+import { doctor, formatDoctor, formatWarning, hardFailures, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { assertSlug, isValidSlug, recordedControlDir, recordedLaunchdLabel, runPaths, type RunPaths } from './paths.ts';
 import { buildJobEnv, buildProgramArgs, launchdLabel, renderPlist } from './plist.ts';
 import { loadSpec } from './specmeta.ts';
@@ -209,7 +209,7 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
   if (hard.length > 0) {
     throw new Error(`doctor reported hard failures, not launching:\n${formatDoctor({ checks: hard })}`);
   }
-  for (const c of report.checks) if (!c.ok) io.out(`warning: ${c.name}: ${c.detail}`);
+  for (const c of report.checks) if (!c.ok) io.out(formatWarning(c));
 
   if ('error' in opencodeResolved) throw opencodeResolved.error;
   if ('error' in gitResolved) throw gitResolved.error;

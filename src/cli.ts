@@ -5,7 +5,7 @@
  * deps (tests).
  */
 import * as nodeFs from 'node:fs';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -81,6 +81,13 @@ export function buildProgram(opts: ProgramOptions): Command {
         return undefined;
       }
     },
+    realpath: (p) => {
+      try {
+        return realpathSync(p);
+      } catch {
+        return undefined;
+      }
+    },
   };
   const program = new Command(APP).description(`Launch and manage autonomous ${APP} runs`);
   program.exitOverride();
@@ -132,7 +139,8 @@ export function buildProgram(opts: ProgramOptions): Command {
     .description('Check the environment for an unattended run (--audit-repo: scan this checkout for user-specific facts)')
     .option('--audit-repo', 'scan the tracked files of a repo for home paths, emails, ticket keys and the profile bannedTerms')
     .option('--dir <repo>', 'repo to audit with --audit-repo (default: the checkout containing this CLI)')
-    .action(async (o: { auditRepo?: boolean; dir?: string }) => {
+    .option('--verbose', 'print the full detail of every check (the default output is one line of at most 200 characters per check)')
+    .action(async (o: { auditRepo?: boolean; dir?: string; verbose?: boolean }) => {
       if (o.auditRepo) {
         const dir = resolve(o.dir ?? CLI_REPO_ROOT);
         let bannedTerms: string[] = [];
@@ -154,7 +162,7 @@ export function buildProgram(opts: ProgramOptions): Command {
         return;
       }
       const result = await runDoctor();
-      out(formatDoctor(result));
+      out(formatDoctor(result, { verbose: o.verbose === true }));
       if (hasHardFailure(result)) fail(1);
     });
 
@@ -174,6 +182,7 @@ export function buildProgram(opts: ProgramOptions): Command {
       exec,
       fs,
       nodePath: deps.nodePath,
+      env: opts.env ?? process.env,
       ...settled,
       ...(await profileToolchainOptions(settled)),
       lockIsFree: () => deps.lockIsFree(),
