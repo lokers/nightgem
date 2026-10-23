@@ -109,18 +109,25 @@ export const WIND_DOWN_TAG = 'wind-down:';
  */
 export const REVIEW_LITE_MARKER_FILE = 'review-lite.json';
 /**
- * Ids of the tasks that an earlier attempt's wind-down parked and nothing since has changed: the task's LATEST event is
- * before `offset` and is `blocked` or `skipped` with a `blockedReason` starting with `wind-down:`. Phase, integration and
- * wind-down lines are not tasks. Shared by the resume start, `phaseDone('build')` and `nextTask`, so a build can never count
+ * Ids of the tasks that a wind-down parked and nothing since has changed: the task's LATEST event is before `offset` and is
+ * `blocked` or `skipped` with a `blockedReason` starting with `wind-down:`. Pass `events.length` as the offset for "any".
+ * Phase, integration and wind-down lines are not tasks, and neither are review fix-ups (ids `review-fix-*`, or tasks whose
+ * first event is in the review phase). Shared by the resume start (offset = the attempt's), `phaseDone('build')` (any offset) and `nextTask` (the attempt's offset, so tasks parked in this attempt are not handed back), so a build can never count
  * as finished while a parked task is untouched.
  */
 export function windDownParked(events: readonly TaskEvent[], offset: number): string[] {
   const latest = new Map<string, number>();
-  events.forEach((t, idx) => latest.set(t.id, idx));
+  const firstPhase = new Map<string, Phase>();
+  events.forEach((t, idx) => {
+    latest.set(t.id, idx);
+    if (!firstPhase.has(t.id)) firstPhase.set(t.id, t.phase);
+  });
   const ids: string[] = [];
   for (const [id, idx] of latest) {
     const t = events[idx]!;
     if (/^(phase|integration|wind-down):/.test(id)) continue;
+    // review fix-ups belong to the review: a review that runs again starts its own round, build must not be re-opened for them
+    if (id.startsWith('review-fix-') || firstPhase.get(id) === 'review') continue;
     if (idx < offset && ['blocked', 'skipped'].includes(t.state) && t.blockedReason?.startsWith(WIND_DOWN_TAG) === true) ids.push(id);
   }
   return ids;
@@ -1092,8 +1099,9 @@ class Run {
   private phaseDone(phase: Phase): boolean {
     const events = this.tasks();
     if (events.slice(this.taskOffset).some((t) => t.id === `phase:${phase}` && t.state === 'done')) {
-      // a build agent that writes phase:build while a wind-down-parked task is untouched has not finished: nudge, never complete
-      return phase !== 'build' || windDownParked(events, this.taskOffset).length === 0;
+      // A build is never done while any task's latest event carries the wind-down tag, whenever it was written: an agent
+      // that parks a task (again) and then writes phase:build has not finished. It is nudged, or wound down, never completed.
+      return phase !== 'build' || windDownParked(events, events.length).length === 0;
     }
     return phase === 'review' && this.runCompleteSeen() && this.finalReviewExists();
   }

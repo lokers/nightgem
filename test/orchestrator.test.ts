@@ -2247,6 +2247,60 @@ describe('resume: parked tasks (AD9)', () => {
     }
   });
 
+  it('a task re-parked with the wind-down tag AFTER the offset, then phase:build: the build is not done (stalled), and the nudge does not name it', async () => {
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'phase-build') {
+            srv.appendTask({ id: 'docs', state: 'blocked', phase: 'build', blockedReason: 'wind-down: still parked' });
+            srv.completePhase(rec.sessionId, 'build', { afterMs: 10_000, costUsd: 0.5 }); // writes phase:build
+          } else if (rec.kind !== 'nudge') autoPhases(rec, srv);
+        },
+      },
+      parkedTasks,
+    );
+    const res = await h.run();
+    expect(res.state).toBe('stalled');
+    expect(kinds(h)).not.toContain('phase-review');
+    expect(kinds(h)).not.toContain('phase-report');
+    const nudges = h.server.prompts.filter((p) => p.kind === 'nudge');
+    expect(nudges.length).toBeGreaterThan(0);
+    expect(nudges[0]!.text).not.toContain('**docs**'); // parked in THIS attempt: not handed back as pending work
+    expect(h.logs.some((l) => l.event === 'phase.end' && l.fields.phase === 'build' && l.fields.outcome === 'done')).toBe(false);
+  });
+
+  it('in the attempt that winds down, a build agent that parks a task and writes phase:build ends the build wound-down, not done', async () => {
+    const h: Harness = makeHarness({
+      script: (rec, srv) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          h.clock.setTimeout(() => srv.addCost(rec.sessionId, 8.5), 20_000);
+        } else if (rec.kind === 'wind-down') {
+          srv.appendTask({ id: 'docs', state: 'blocked', phase: 'build', blockedReason: 'wind-down: unfinished at soft stop' });
+          srv.markPhaseDone('build'); // wrongly, but it must not count
+          h.clock.setTimeout(() => srv.setBusy(rec.sessionId, false), 5_000);
+        } else autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'aborted-budget', stopReason: 'budget-soft' });
+    expect(h.logs.find((l) => l.event === 'phase.end' && l.fields.phase === 'build')?.fields.outcome).toBe('wound-down');
+    expect(kinds(h)).toEqual(['phase-plan', 'phase-build', 'wind-down', 'phase-review-lite', 'phase-report']);
+  });
+
+  it('review fix-ups parked by a wind-down are not build work: a resume goes to the review, not back to build', async () => {
+    const { h } = resumed({}, [
+      taskLine('phase:plan', 'done', 'plan'),
+      taskLine('phase:build', 'done', 'build'),
+      taskLine('review-fix-1', 'blocked', 'review', { blockedReason: 'wind-down: unfinished at soft stop' }),
+      taskLine('late-fix', 'todo', 'review'),
+      taskLine('late-fix', 'skipped', 'build', { blockedReason: 'wind-down: x' }), // first event is in the review phase
+    ]);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
+  });
+
   it('windDownParked: only the latest event before the offset counts, and phase / integration / wind-down lines are not tasks', () => {
     const ev = (id: string, state: string, blockedReason?: string) =>
       JSON.parse(taskLine(id, state, 'build', blockedReason ? { blockedReason } : {})) as import('../src/contracts.ts').TaskEvent;
@@ -2263,5 +2317,8 @@ describe('resume: parked tasks (AD9)', () => {
     expect(windDownParked(events, 7)).toEqual(['a', 'b']); // e is after the offset
     expect(windDownParked(events, 8)).toEqual(['a', 'b', 'e']);
     expect(windDownParked(events, 0)).toEqual([]);
+    expect(windDownParked(events, events.length)).toEqual(['a', 'b', 'e']); // "any": what phaseDone('build') asks
+    const fixups = [ev('review-fix-1', 'blocked', 'wind-down: x'), { ...ev('r2', 'blocked', 'wind-down: x'), phase: 'review' as const }, ev('t', 'blocked', 'wind-down: x')];
+    expect(windDownParked(fixups, fixups.length)).toEqual(['t']); // review fix-ups are not build work
   });
 });
