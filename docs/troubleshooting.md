@@ -2,7 +2,7 @@
 
 [← README](../README.md) · [How it works](how-it-works.md) · [Profile](profile.md) · [Safety model](safety-model.md) · [Troubleshooting](troubleshooting.md) · [OpenCode notes](opencode-notes.md)
 
-Run `nightgem doctor` first. Lines starting with `FAIL` block a launch; `warn` lines do not. `doctor` never crashes on a missing or broken profile: that is a single `FAIL profile` line.
+Run `nightgem doctor` first. Lines starting with `FAIL` block a launch; `warn` lines do not. `doctor` never crashes on a missing or broken profile: that is a single `FAIL profile` line. Each check prints one line of at most 200 characters, long details are summarised, and `nightgem doctor --verbose` prints the full text.
 
 ## Doctor failures
 
@@ -11,6 +11,8 @@ Run `nightgem doctor` first. Lines starting with `FAIL` block a launch; `warn` l
 | `profile` (missing or invalid) | Run `install --workspace <dir>` to write a starter, or fix the file; `profile validate` prints the errors. |
 | `profile` (workspace rejected) | The `workspaceRoot` must exist, hold your repos, and not be `/`, `$HOME` or an ancestor, overlap `~/Library`, `~/.config`, `~/.ssh` or the control root, or sit inside a git work tree. |
 | `oh-my-opencode-slim` | Run `npx oh-my-opencode-slim@latest install` and pin the plugin to 3.x in your global `opencode.json`. Then start OpenCode once (the TUI or `opencode run`) so the plugin is downloaded into its cache: the sandboxed run server cannot install it, and without it only the built-in agents register and the preflight fails with missing agents. |
+| `oh-my-opencode-slim` ("configured but not in OpenCode's cache") | A hard failure: the plugin is in your `opencode.json` but OpenCode has not downloaded it yet, and the sandboxed run server cannot. Start OpenCode once (the TUI, or `opencode run "hi"`), then run `doctor` again. |
+| `cli on PATH` (warning) | `nightgem` is not on your PATH, or it points at another checkout. The slash commands work without it. In this checkout run `npm link` (missing), or `npm unlink -g nightgem && npm link` (stale: the line names the other checkout). |
 | `required skills` | Run `npx skills add addyosmani/agent-skills`. If a name is listed as excluded, remove the matching `skills.exclude` pattern. |
 | `AC power` | Plug in the charger and run `doctor` again. A run on battery can be cut short by sleep. |
 | `lock` ("another run holds the lock") | One run at a time. Check `status`. If the run is dead, see [Stale lock](#stale-lock). |
@@ -25,7 +27,7 @@ Run `nightgem doctor` first. Lines starting with `FAIL` block a launch; `warn` l
 | rule preflight | A rule resolves to `ask`/`allow` where it must deny. Read the failing probe; do not launch around it. |
 | per-repo tools, tracker CLI (warnings) | Install the tool, or list the right executables in `repos.<name>.tools`. A missing tool shows up later as a failed task. |
 
-What `doctor` checks, in full: OpenCode version (2.0.x, tested 2.0.29), the slim plugin and its major version (missing or another major fails; a version that cannot be determined warns), the five required skills plus `skills.required` (and that no exclude pattern removes one), skill name collisions and rejected roots (warnings), profile validity and the workspace rules, an absolute node path, `/usr/bin/sandbox-exec`, `launchctl`, **AC power**, at least 20 GB free disk under the workspace, the run lock, no ancestor `opencode.json` / `.opencode/` above the workspace, the installed pieces of this checkout (orchestrator entry, guard plugin, ssh wrapper, probe corpus), remote URLs of the spec repos, per-repo tools (warning), the tracker CLI (warning) and that the run models are available. The rule preflight and the canary run at launch.
+What `doctor` checks, in full: OpenCode version (2.0.x, tested 2.0.29), the slim plugin and its major version (missing, not yet downloaded into OpenCode's cache, or another major fails), whether `nightgem` on your PATH is this checkout (warning), the five required skills plus `skills.required` (and that no exclude pattern removes one), skill name collisions and rejected roots (warnings), profile validity and the workspace rules, an absolute node path, `/usr/bin/sandbox-exec`, `launchctl`, **AC power**, at least 20 GB free disk under the workspace, the run lock, no ancestor `opencode.json` / `.opencode/` above the workspace, the installed pieces of this checkout (orchestrator entry, guard plugin, ssh wrapper, probe corpus), remote URLs of the spec repos, per-repo tools (warning), the tracker CLI (warning) and that the run models are available. The rule preflight and the canary run at launch.
 
 ## Preflight canary failures
 
