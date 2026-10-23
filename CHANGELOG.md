@@ -9,6 +9,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - `npm link` puts `nightgem` on your PATH from a clone (the bins resolve `src/` and `dist/` through the symlink), `uninstall` prints the `npm unlink -g nightgem` hint, and the docs use `nightgem <command>` (#8)
 
+### Changed
+
+- `launch` refuses a slug that already has a run, instead of overwriting it (#9)
+
 ## [0.1.0] - 2026-10-23
 
 First public release. Experimental: macOS only, run from a clone (not published to npm yet).

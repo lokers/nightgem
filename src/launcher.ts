@@ -160,6 +160,26 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
   const keyPattern = runContext.profile.data.tracker.keyPattern;
   const spec = loadSpec(slug, { home: deps.home, workspaceRoot, repoOverride: input.repos, ...(keyPattern === undefined ? {} : { keyPattern: new RegExp(keyPattern) }) });
 
+  // 1b. A slug that already has a run is never relaunched: that would overwrite its RUN.json (and its history).
+  const existing = runPaths(slug, { home: deps.home, workspaceRoot });
+  let existingManifest: RunManifest | undefined;
+  try {
+    existingManifest = await deps.readManifest(slug);
+  } catch {
+    // unreadable or invalid: still a run that is on disk, refused below
+  }
+  if (existingManifest !== undefined || existsSync(existing.runJson) || existsSync(join(existing.specsDir, 'RUN.json'))) {
+    const cli = cliInvocation(deps.nodePath);
+    const state = existingManifest?.state;
+    const resumable = state === 'stopped' || state === 'aborted-budget' || state === 'failed' || state === 'stalled';
+    const next = resumable
+      ? `To continue it, run "${cli} resume ${slug} --budget <usd>", or launch under a new slug.`
+      : state === undefined || state === 'completed'
+        ? `Launch under a new slug${state === undefined ? ' (or inspect it with "status")' : ''}.`
+        : `It is still active: check it with "${cli} status ${slug}" or stop it with "${cli} stop ${slug}", or launch under a new slug.`;
+    throw new Error(`Run "${slug}" already exists${state === undefined ? '' : ` (state: ${state})`}; launch will not overwrite its RUN.json. ${next}`);
+  }
+
   // 2. Doctor: any hard failure aborts. The verify tools are looked up on the PATH the JOB will get, not ours.
   const opencodeResolved = await resolveBin(exec, 'opencode').then((p) => ({ path: p }), (error: unknown) => ({ error }));
   const gitResolved = await resolveBin(exec, 'git').then((p) => ({ path: p }), (error: unknown) => ({ error }));

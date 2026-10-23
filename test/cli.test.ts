@@ -451,6 +451,57 @@ describe('report and commander surface', () => {
 });
 
 
+describe('launch: refuses a slug that already has a run (#9)', () => {
+  const resumable = ['stopped', 'aborted-budget', 'failed', 'stalled'] as const;
+  const attemptsFor = (state: string): void => void seedManifest({ state });
+
+  for (const state of resumable) {
+    it(`refuses a ${state} run and points to resume, without writing`, async () => {
+      attemptsFor(state);
+      const before = JSON.stringify(manifests.get(SLUG));
+      const run = launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+      await expect(run).rejects.toThrow(new RegExp(`already exists \\(state: ${state}\\)`));
+      await expect(run).rejects.toThrow(new RegExp(`resume ${SLUG} --budget <usd>`));
+      expect(JSON.stringify(manifests.get(SLUG))).toBe(before);
+      expect(log.filter((l) => l.startsWith('deps:write') || l.startsWith('deps:acquire') || l.includes('bootstrap'))).toEqual([]);
+    });
+  }
+
+  it('refuses a completed run and suggests a new slug, not resume', async () => {
+    attemptsFor('completed');
+    const err = await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} }).catch((e: Error) => e);
+    expect((err as Error).message).toMatch(/already exists \(state: completed\).*new slug/);
+    expect((err as Error).message).not.toMatch(/resume/);
+    expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+  });
+
+  for (const state of ['launching', 'running', 'winding-down', 'stopping'] as const) {
+    it(`refuses a ${state} run and points to status and stop`, async () => {
+      attemptsFor(state);
+      const before = JSON.stringify(manifests.get(SLUG));
+      const err = await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec({ jobState: 'running' }), fs, io: io(), parentEnv: {} }).catch((e: Error) => e);
+      expect((err as Error).message).toMatch(new RegExp(`already exists \\(state: ${state}\\).*still active.* status ${SLUG}.* stop ${SLUG}`));
+      expect(JSON.stringify(manifests.get(SLUG))).toBe(before);
+      expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+    });
+  }
+
+  it('refuses a RUN.json on disk that the reader cannot parse, and leaves it untouched', async () => {
+    const p = runPaths(SLUG, { home, workspaceRoot });
+    mkdirSync(p.runDir, { recursive: true });
+    writeFileSync(p.runJson, '{not json');
+    const deps = makeDeps({ readManifest: async () => { throw new Error('corrupt'); } });
+    await expect(launch({ slug: SLUG, budgetUsd: 50, deps, exec: makeExec(), fs, io: io(), parentEnv: {} })).rejects.toThrow(/already exists/);
+    expect(readFileSync(p.runJson, 'utf8')).toBe('{not json');
+    expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+  });
+
+  it('still launches a fresh slug', async () => {
+    await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+    expect(manifests.get(SLUG)!.state).toBe('launching');
+  });
+});
+
 describe('launch: the launcher is the sole v2 RUN.json writer', () => {
   it('resolves the run context once and records skills, profile and instructions in RUN.json', async () => {
     let resolved = 0;
