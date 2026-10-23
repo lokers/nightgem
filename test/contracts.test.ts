@@ -12,6 +12,7 @@ import {
   isTerminalRunState,
   ModelRef,
   attemptsOf,
+  isNeverStartedFailure,
   parseModelRef,
   RunAttempt,
   PermissionRepliedData,
@@ -477,5 +478,25 @@ describe('RunManifest attempts', () => {
     const m = parseRunManifest(fixture('manifest-v2-attempts.json'));
     expect(attemptsOf(m)).toBe(m.attempts);
     expect(attemptsOf(m).map((a) => a.n)).toEqual([1, 2]);
+  });
+});
+
+describe('isNeverStartedFailure', () => {
+  const failed = { ...minimalManifest, state: 'failed' };
+  const attempt = { n: 1, startedAt: '2026-10-21T10:00:00.000Z', budgetUsd: 5, costAtStartUsd: 0 };
+
+  it('is true only for a failed manifest with no start, no root sessions and no attempts', () => {
+    expect(isNeverStartedFailure(RunManifest.parse(failed))).toBe(true);
+    expect(isNeverStartedFailure(RunManifest.parse({ ...failed, attempts: [] }))).toBe(true);
+    expect(isNeverStartedFailure(RunManifest.parse({ ...failed, stopReason: 'launch failed: x', endedAt: '2026-10-21T10:01:00.000Z' }))).toBe(true);
+  });
+
+  it('is false once the run started, had sessions or attempts, or is not failed', () => {
+    expect(isNeverStartedFailure(RunManifest.parse({ ...failed, startedAt: '2026-10-21T10:00:30.000Z' }))).toBe(false);
+    expect(isNeverStartedFailure(RunManifest.parse({ ...failed, rootSessions: [{ phase: 'plan', sessionId: 's1' }] }))).toBe(false);
+    expect(isNeverStartedFailure(RunManifest.parse({ ...failed, attempts: [attempt] }))).toBe(false);
+    for (const state of ['launching', 'running', 'winding-down', 'stopping', 'completed', 'stalled', 'aborted-budget', 'stopped']) {
+      expect(isNeverStartedFailure(RunManifest.parse({ ...minimalManifest, state }))).toBe(false);
+    }
   });
 });

@@ -453,7 +453,8 @@ describe('report and commander surface', () => {
 
 describe('launch: refuses a slug that already has a run (#9)', () => {
   const resumable = ['stopped', 'aborted-budget', 'failed', 'stalled'] as const;
-  const attemptsFor = (state: string): void => void seedManifest({ state });
+  // a `failed` run that never started is retryable (see below), so the refused cases have started
+  const attemptsFor = (state: string): void => void seedManifest({ state, startedAt: '2026-10-21T22:00:30.000Z' });
 
   for (const state of resumable) {
     it(`refuses a ${state} run and points to resume, without writing`, async () => {
@@ -481,6 +482,31 @@ describe('launch: refuses a slug that already has a run (#9)', () => {
       const before = JSON.stringify(manifests.get(SLUG));
       const err = await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec({ jobState: 'running' }), fs, io: io(), parentEnv: {} }).catch((e: Error) => e);
       expect((err as Error).message).toMatch(new RegExp(`already exists \\(state: ${state}\\).*still active.* status ${SLUG}.* stop ${SLUG}`));
+      expect(JSON.stringify(manifests.get(SLUG))).toBe(before);
+      expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+    });
+  }
+
+  it('lets launch retry a failed run that never started, and overwrites its manifest', async () => {
+    seedManifest({ state: 'failed', stopReason: 'launch failed: boom', endedAt: NOW.toISOString(), knownSessionIds: [], costUsd: 0 });
+    await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+    const m = manifests.get(SLUG)!;
+    expect(m).toMatchObject({ state: 'launching', budgetUsd: 50 });
+    expect(m.stopReason).toBeUndefined();
+    expect(log).toContain('deps:writeManifest launching');
+  });
+
+  const startedFailures: Array<[string, Record<string, unknown>]> = [
+    ['startedAt', { startedAt: '2026-10-21T22:00:30.000Z' }],
+    ['rootSessions', { rootSessions: [{ phase: 'plan', sessionId: 's1' }] }],
+    ['attempts', { attempts: [{ n: 1, startedAt: '2026-10-21T22:00:30.000Z', budgetUsd: 5, costAtStartUsd: 0 }] }],
+  ];
+  for (const [what, over] of startedFailures) {
+    it(`still refuses a failed run with ${what}, pointing at resume`, async () => {
+      seedManifest({ state: 'failed', ...over });
+      const before = JSON.stringify(manifests.get(SLUG));
+      const err = await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} }).catch((e: Error) => e);
+      expect((err as Error).message).toMatch(new RegExp(`already exists \\(state: failed\\).*resume ${SLUG} --budget <usd>`));
       expect(JSON.stringify(manifests.get(SLUG))).toBe(before);
       expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
     });

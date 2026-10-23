@@ -8,7 +8,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileS
 import { dirname, join } from 'node:path';
 
 import { cliInvocation, type CliDeps, type ExecFn } from './cli-deps.ts';
-import { isTerminalRunState, RUN_MANIFEST_VERSION, RunContextSnapshot, RunManifest, type RepoEntry } from './contracts.ts';
+import { isNeverStartedFailure, isTerminalRunState, RUN_MANIFEST_VERSION, RunContextSnapshot, RunManifest, type RepoEntry } from './contracts.ts';
 import { doctor, formatDoctor, hardFailures, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { assertSlug, isValidSlug, recordedControlDir, recordedLaunchdLabel, runPaths, type RunPaths } from './paths.ts';
 import { buildJobEnv, buildProgramArgs, launchdLabel, renderPlist } from './plist.ts';
@@ -168,7 +168,9 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
   } catch {
     // unreadable or invalid: still a run that is on disk, refused below
   }
-  if (existingManifest !== undefined || existsSync(existing.runJson) || existsSync(join(existing.specsDir, 'RUN.json'))) {
+  // the one exception: a launch that failed before the run ever started holds no history, so the slug can be retried
+  const retryable = existingManifest !== undefined && isNeverStartedFailure(existingManifest);
+  if (!retryable && (existingManifest !== undefined || existsSync(existing.runJson) || existsSync(join(existing.specsDir, 'RUN.json')))) {
     const cli = cliInvocation(deps.nodePath);
     const state = existingManifest?.state;
     const resumable = state === 'stopped' || state === 'aborted-budget' || state === 'failed' || state === 'stalled';

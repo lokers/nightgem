@@ -11,7 +11,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
-- `launch` refuses a slug that already has a run, instead of overwriting it (#9)
+- `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried (#9)
 
 ## [0.1.0] - 2026-10-23
 

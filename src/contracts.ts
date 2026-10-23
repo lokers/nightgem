@@ -299,6 +299,21 @@ export function attemptsOf(
   ];
 }
 
+/**
+ * True for a run whose launch failed before the orchestrator ever started it: state `failed`, no `startedAt`, no root
+ * sessions and no attempt. Such a manifest holds no run history, so `launch` may overwrite it to retry the slug.
+ */
+export function isNeverStartedFailure(
+  m: Pick<RunManifest, 'state' | 'startedAt' | 'rootSessions' | 'attempts'>,
+): boolean {
+  return (
+    m.state === 'failed' &&
+    m.startedAt === undefined &&
+    m.rootSessions.length === 0 &&
+    (m.attempts ?? []).every((a) => !a.startedAt)
+  );
+}
+
 /** Thrown when a v1 RUN.json cannot be upgraded because `runDir` is not `<ws>/.specs/<slug>/.run`. */
 export class ManifestUpgradeError extends Error {
   constructor(message: string) {
