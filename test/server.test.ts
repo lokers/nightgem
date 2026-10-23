@@ -331,7 +331,7 @@ describe('prepareRunServer', () => {
 
   it('an explicit tmpDir input wins (tests, custom setups)', async () => {
     const home = freshHome();
-    const tmpDir = join(root, 'custom-tmp');
+    const tmpDir = join(root, 'nightgem-custom');
     const prep = await prepareRunServer({ slug: SLUG, home, workspaceRoot: join(home, 'workspace'), safety: safetyFor(join(home, 'workspace')), model: 'a/b', smallModel: 'a/c', opencodeBin: '/bin/oc', sandbox: false, tmpDir, baseEnv: baseEnv() });
     expect(prep.tmpDir).toBe(tmpDir);
     expect(prep.env.TMPDIR).toBe(tmpDir);
@@ -339,7 +339,7 @@ describe('prepareRunServer', () => {
 
   it('wipes and recreates the run tmp dir (0700) at every start, whatever an earlier server left in it', async () => {
     const home = freshHome();
-    const tmpDir = join(root, 'wipe-tmp');
+    const tmpDir = join(root, 'nightgem-wipe');
     mkdirSync(join(tmpDir, 'old-dir'), { recursive: true });
     writeFileSync(join(tmpDir, 'old-file'), 'x');
     writeFileSync(join(tmpDir, 'old-dir', 'nested'), 'x');
@@ -512,18 +512,57 @@ describe('startRunServer (fake opencode)', () => {
 });
 
 describe('resetRunTmpDir', () => {
-  it('refuses a dir that is, or contains, a protected path, or is too shallow', () => {
+  it('refuses a name without the nightgem- prefix, a shared temp dir, and a relative or root path', () => {
     const base = mkdtempSync(join(tmpdir(), 'ng-reset-'));
     try {
       const keep = join(base, 'keep');
       mkdirSync(keep);
       writeFileSync(join(keep, 'f'), 'x');
-      expect(() => resetRunTmpDir(keep, [keep])).toThrow(/Refusing/);
-      expect(() => resetRunTmpDir(base, [keep])).toThrow(/contains/);
-      expect(() => resetRunTmpDir('/', [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir(keep, [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir('/private/tmp', [])).toThrow(/Refusing/);
       expect(() => resetRunTmpDir('/tmp', [])).toThrow(/Refusing/);
-      expect(() => resetRunTmpDir('relative/dir', [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir(realpathSync(tmpdir()), [])).toThrow(/Refusing/); // the per-user temp dir itself
+      expect(() => resetRunTmpDir('/', [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir('nightgem-relative', [])).toThrow(/Refusing/);
       expect(readFileSync(join(keep, 'f'), 'utf8')).toBe('x');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a prefixed dir that is, or contains, a protected path', () => {
+    const base = mkdtempSync(join(tmpdir(), 'ng-reset-'));
+    try {
+      const ws = join(base, 'nightgem-parent', 'workspace');
+      mkdirSync(ws, { recursive: true });
+      writeFileSync(join(ws, 'f'), 'x');
+      expect(() => resetRunTmpDir(join(base, 'nightgem-parent'), [ws])).toThrow(/contains/);
+      expect(() => resetRunTmpDir(ws.replace('workspace', 'nightgem-ws'), [])).not.toThrow(); // a sibling is fine
+      const named = join(base, 'nightgem-ws2');
+      mkdirSync(named);
+      expect(() => resetRunTmpDir(named, [named])).toThrow(/contains/);
+      expect(readFileSync(join(ws, 'f'), 'utf8')).toBe('x');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the parent through symlinks: a symlinked parent cannot point the wipe at the workspace', () => {
+    const base = mkdtempSync(join(tmpdir(), 'ng-reset-'));
+    try {
+      const real = join(base, 'real');
+      const ws = join(real, 'nightgem-workspace'); // a workspace whose name happens to carry the prefix
+      mkdirSync(ws, { recursive: true });
+      writeFileSync(join(ws, 'f'), 'x');
+      const link = join(base, 'link');
+      symlinkSync(real, link);
+      expect(() => resetRunTmpDir(join(link, 'nightgem-workspace'), [ws])).toThrow(/contains/);
+      // and the other way round: the protected path given through the link
+      expect(() => resetRunTmpDir(ws, [join(link, 'nightgem-workspace')])).toThrow(/contains/);
+      // a symlinked parent that leads to a harmless place just works
+      resetRunTmpDir(join(link, 'nightgem-other'), [ws]);
+      expect(readdirSync(join(real, 'nightgem-other'))).toEqual([]);
+      expect(readFileSync(join(ws, 'f'), 'utf8')).toBe('x');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }

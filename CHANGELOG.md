@@ -12,6 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Heredocs and a bare `mktemp` now work inside a run: `TMPPREFIX` points into the run tmp dir (zsh heredocs) and a read-only `mktemp` shim is first on `PATH`. The sandbox write allowance is unchanged: bash and `sh` heredocs still need a writable working directory (the run dir or a worktree). The run tmp dir is wiped when the server starts, and the canary now fails the launch if any of this stops working or if `/private/var/tmp` becomes writable (#7)
 - `doctor` fails (hard) when oh-my-opencode-slim is configured but not yet in OpenCode's cache, and tells you to start OpenCode once (#8)
 - `doctor` and the `launch` warnings print at most 200 characters per line, with long details summarised (#8)
 - `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried (#9)

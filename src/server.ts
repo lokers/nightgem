@@ -14,7 +14,7 @@ import { execa } from 'execa';
 import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -295,18 +295,34 @@ export function runTmpDir(slug: string, base: string = tmpdir()): string {
 
 /**
  * Empty the run tmp dir and recreate it 0700. Called at every server start so a run never sees files an earlier server left.
- * Refuses a dir that is, or contains, the home, workspace or control dir, or that is too shallow to be a run tmp dir. A
- * symlink at the path is unlinked, never followed.
+ * Refuses (like `removeRunTmp`) a dir whose name does not start with {@link TMP_PREFIX}, and a dir that, after resolving its
+ * PARENT through symlinks, is or contains the home, workspace or control dir (a symlinked parent cannot point the wipe at them).
+ * A symlink at the path itself is unlinked, never followed.
  */
 export function resetRunTmpDir(tmpDir: string, protect: readonly string[]): void {
-  if (!isAbsolute(tmpDir) || tmpDir.split(sep).filter(Boolean).length < 2) throw new Error(`Refusing to reset tmp dir "${tmpDir}"`);
-  for (const p of protect) {
-    const rel = relative(tmpDir, p);
-    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`Refusing to reset tmp dir "${tmpDir}": it contains "${p}"`);
+  if (!isAbsolute(tmpDir) || !basename(tmpDir).startsWith(TMP_PREFIX) || dirname(tmpDir) === tmpDir) throw new Error(`Refusing to reset tmp dir "${tmpDir}"`);
+  let parent = dirname(tmpDir);
+  try {
+    parent = realpathSync(parent);
+  } catch {
+    /* a parent that does not exist yet cannot lead anywhere */
   }
-  rmSync(tmpDir, { recursive: true, force: true });
-  mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
-  chmodSync(tmpDir, 0o700);
+  const target = join(parent, basename(tmpDir));
+  for (const p of protect) {
+    let real = p;
+    try {
+      real = realpathSync(p);
+    } catch {
+      /* a protected path that does not exist yet is compared as given */
+    }
+    for (const candidate of new Set([p, real])) {
+      const rel = relative(target, candidate);
+      if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`Refusing to reset tmp dir "${tmpDir}": it contains "${p}"`);
+    }
+  }
+  rmSync(target, { recursive: true, force: true });
+  mkdirSync(target, { recursive: true, mode: 0o700 });
+  chmodSync(target, 0o700);
 }
 
 /** The package's PATH shims (`profile/shims/<name>`), copied into the control dir at run start. */

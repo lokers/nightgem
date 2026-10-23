@@ -742,12 +742,6 @@ export interface ShellProbe {
    * (`preflight.canary` log) but a `false` never fails the canary.
    */
   diagnostic?: boolean;
-  /**
-   * TEMPORARY (T1 -> T2, #7): a probe that must succeed but fails under today's code (docs/opencode-notes.md, "Temp files and
-   * heredocs inside runs"). While set, a failure is recorded (`expectedFail`) and does not fail the launch. Task T2 fixes the
-   * environment and removes this flag; the probe then guards the fix.
-   */
-  expectedFailUntilT2?: boolean;
 }
 
 export interface ProbeResult {
@@ -758,8 +752,6 @@ export interface ProbeResult {
   skipped?: string;
   /** The probe is a diagnostic: `ok` is information, not a gate. */
   diagnostic?: true;
-  /** `expectedFailUntilT2` probe that failed: recorded, not a launch failure. */
-  expectedFail?: true;
 }
 
 export interface ShellProbeInput {
@@ -793,27 +785,37 @@ export const SSH_BLOCKED_PROBE =
 /**
  * Probes that must SUCCEED: the shell has to be able to make temp files, because agents write heredocs and call `mktemp` all the
  * time (#7). They print nothing: pass/fail is the exit code. `/shell` runs `/bin/zsh` (an agent's bash tool too, per the recorded
- * fixtures), and zsh writes its heredoc temp files to `$TMPPREFIX` (default `/tmp/zsh`, ignoring `TMPDIR`), while BSD `mktemp`
- * with no template uses the per-user `confstr` dir (`/var/folders/xx/.../T`), also ignoring `TMPDIR`. Both are outside the
- * sandbox write boundary, so the heredoc and bare `mktemp` probes fail today (`expectedFailUntilT2`); a `mktemp` with an explicit
- * `$TMPDIR` template is the one that works. See docs/opencode-notes.md, "Temp files and heredocs inside runs".
+ * fixtures). Three different tools, three fixes (docs/opencode-notes.md, "Temp files and heredocs inside runs"):
+ * zsh heredocs go to `$TMPPREFIX` (set to `<run tmp>/zsh` in the serve env); a bare `mktemp` resolves through PATH to the shim in
+ * the control dir, which adds `-p "$TMPDIR"` (BSD `mktemp` ignores `TMPDIR` otherwise); macOS bash 3.2 and `sh` heredocs write
+ * `/private/var/tmp/sh-thd-<digits>` or in a writable cwd; the sandbox has NO rule for the former (a write there must fail, probed below), so
+ * they work from the run dir or a worktree. A regression in any of them fails the launch.
  */
 export function tmpFileProbes(tmpDir: string, nonce: string): ShellProbe[] {
   const q = shq(tmpDir);
   const heredocFile = `${q}/${TMP_PREFIX}heredoc-probe-${nonce}`;
+  // a heredoc run by another shell: the here-document needs that shell's own temp file, the redirect target is writable.
+  // `cd "$TMPDIR"` first, a writable cwd as in real runs (the run dir or a worktree): macOS bash 3.2 puts the here-document file
+  // in the cwd when it can, and there is deliberately no sandbox rule for its other location (/private/var/tmp), so an
+  // unwritable cwd cannot do heredocs (docs/safety-model.md, "Known limitations").
+  const otherShellHeredoc = (shell: string, tag: string): string => {
+    const file = `${q}/${TMP_PREFIX}heredoc-probe-${tag}-${nonce}`;
+    return ['cd "$TMPDIR" || exit 1', `f=${file}`, `${shell} -c 'cat <<EOF > "$1"`, 'canary', `EOF' _ "$f"`, '[ "$(cat "$f" 2>/dev/null)" = canary ]; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n');
+  };
   return [
     {
       name: 'heredoc into a file in the run tmp dir',
       // a quoted delimiter: no expansion; the here-document itself needs a shell temp file, the redirect target is writable
       command: [`f=${heredocFile}`, `cat <<'EOF' > "$f"`, 'canary', 'EOF', '[ "$(cat "$f" 2>/dev/null)" = canary ]; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
       expect: 'succeed',
-      expectedFailUntilT2: true,
     },
+    { name: 'heredoc through /bin/bash -c', command: otherShellHeredoc('/bin/bash', 'bash'), expect: 'succeed' },
+    { name: 'heredoc through /bin/sh -c', command: otherShellHeredoc('/bin/sh', 'sh'), expect: 'succeed' },
     {
-      name: 'mktemp (no template) and a write to it',
-      command: ['f=$(mktemp) || exit 1', 'echo canary > "$f"; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
+      name: 'mktemp (no template, through the PATH shim) and a write to it',
+      // the file must be inside the run tmp dir: the real BSD mktemp would have used the per-user temp dir (and failed)
+      command: ['f=$(mktemp) || exit 1', `case "$f" in ${q}/*) ;; *) rm -f "$f"; exit 1;; esac`, 'echo canary > "$f"; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
       expect: 'succeed',
-      expectedFailUntilT2: true,
     },
     {
       name: 'mktemp with a $TMPDIR template and a write to it',
@@ -846,12 +848,15 @@ export function buildShellProbes(i: ShellProbeInput): { probes: ShellProbe[]; sk
   else probes.push(...tmpFileProbes(i.tmpDir, i.nonce));
   if (!i.sandbox) {
     skipped.push({ name: 'write /tmp', ok: true, exit: undefined, skipped: 'sandbox disabled' });
+    skipped.push({ name: 'write /private/var/tmp', ok: true, exit: undefined, skipped: 'sandbox disabled' });
     skipped.push({ name: 'ssh to github.com (port 22)', ok: true, exit: undefined, skipped: 'sandbox disabled' });
     skipped.push({ name: 'connect to the run port', ok: true, exit: undefined, skipped: 'sandbox disabled' });
     skipped.push({ name: 'read a sandbox-denied credential path', ok: true, exit: undefined, skipped: 'sandbox disabled' });
     return { probes, skipped };
   }
   probes.push({ name: 'write /tmp', command: `echo canary > /tmp/${TMP_PREFIX}canary-${i.nonce}`, expect: 'fail' });
+  // no sandbox rule covers /private/var/tmp (macOS bash's heredoc temp dir): this guards against a future widening
+  probes.push({ name: 'write /private/var/tmp', command: `echo canary > /private/var/tmp/${TMP_PREFIX}canary-${i.nonce}`, expect: 'fail' });
   // ssh to GitHub must be refused by the kernel (port 22 denied), not only by the fetch-only wrapper. A plain exit-code check
   // cannot tell "blocked" from "reachable, key refused" (both 255), so the probe reads ssh's own message.
   probes.push({ name: 'ssh to github.com (port 22)', command: SSH_BLOCKED_PROBE, expect: 'fail' });
@@ -895,15 +900,13 @@ export async function runShellCanary(
         ok = r.exit === 0 && r.output.startsWith(p.expect.startsWith);
         if (!ok) problem = `canary: "${p.name}" did not give the expected result (exit ${r.exit})`;
       }
-      const tolerated = p.diagnostic === true || p.expectedFailUntilT2 === true;
-      if (problem !== undefined && !tolerated) failures.push(problem);
+      if (problem !== undefined && p.diagnostic !== true) failures.push(problem);
       results.push({
         name: p.name,
         ok,
         exit: r.exit,
         status: r.status,
         ...(p.diagnostic ? { diagnostic: true as const } : {}),
-        ...(p.expectedFailUntilT2 && !ok ? { expectedFail: true as const } : {}),
       });
     } catch (err) {
       failures.push(`canary: "${p.name}" errored: ${isRunApiError(err) ? `HTTP ${err.status ?? err.kind}` : errMsg(err)}`);
