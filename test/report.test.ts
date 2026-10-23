@@ -739,6 +739,32 @@ describe('buildReport: resumed run', () => {
     expect(md).toContain('attempt spend $2.5000 (50.0% used)');
   });
 
+  it('lists a resume-failed attempt with its stop reason, but the budget use is the last attempt that ran', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'resumed'), d, { recursive: true });
+    const run = JSON.parse(await readFile(join(d, 'RUN.json'), 'utf8')) as { attempts: Array<Record<string, unknown>> };
+    // what a rolled-back resume leaves: the previous manifest (budget $5) and a closed, failed third attempt (budget $9)
+    run.attempts.push({
+      n: 3,
+      startedAt: '2026-10-22T11:00:00.000Z',
+      endedAt: '2026-10-22T11:00:05.000Z',
+      state: 'failed',
+      stopReason: 'resume-failed',
+      budgetUsd: 9,
+      costAtStartUsd: 3.55,
+      costUsd: 0,
+    });
+    await writeFile(join(d, 'RUN.json'), JSON.stringify(run));
+    const md = await buildReport({ paths: pathsFor(d), git: fakeGit(resumedRepos()) });
+    expect(md).toContain(
+      '| 3 | 2026-10-22T11:00:00.000Z | 2026-10-22T11:00:05.000Z | failed | resume-failed | $9.0000 | $0.0000 |',
+    );
+    expect(md).toContain('- Resumed (2 attempts, 1 failed to start)');
+    expect(md).toContain('- Duration: 2h 15m 0s (sum of attempts)'); // the failed start did not run
+    expect(md).toContain('- Budget (attempt 2): $5.0000, attempt spend $2.5000 (50.0% used)');
+    expect(md).not.toContain('attempt 3');
+  });
+
   it('shows an open attempt and is deterministic', async () => {
     const d = await tmp();
     await cp(join(FIXTURES, 'resumed'), d, { recursive: true });

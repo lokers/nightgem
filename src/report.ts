@@ -42,6 +42,8 @@ const NARRATIVE_HEADING = '## Narrative';
 const INTEGRATION_PREFIX = 'integration:';
 const PHASE_PREFIX = 'phase:';
 const WIND_DOWN_PREFIX = 'wind-down:';
+/** The stop reason of a resume that was rolled back before it ran (see `resume`). */
+const RESUME_FAILED = 'resume-failed';
 export const FINAL_REVIEW_FILE = 'FINAL_REVIEW.md';
 
 export interface BuildReportInput {
@@ -256,11 +258,17 @@ function attemptSpend(m: RunManifest, a: RunAttempt, isLast: boolean): number | 
   return isLast ? Math.max(0, m.costUsd - a.costAtStartUsd) : null;
 }
 
+/** The last attempt that actually ran: a rolled-back resume (`resume-failed`) never did, and the run's budget is the one before it. */
+function lastRanAttempt(attempts: readonly RunAttempt[]): RunAttempt | undefined {
+  return attempts.filter((a) => a.stopReason !== RESUME_FAILED).at(-1);
+}
+
 function attemptsTable(m: RunManifest): string[] {
   const attempts = attemptsOf(m);
+  const lastRan = lastRanAttempt(attempts);
   const out = ['', '### Attempts', '', '| n | Started | Ended | State | Stop reason | Budget | Attempt spend |', '| --- | --- | --- | --- | --- | --- | --- |'];
   attempts.forEach((a, i) => {
-    const spend = attemptSpend(m, a, i === attempts.length - 1);
+    const spend = attemptSpend(m, a, a === lastRan);
     out.push(
       `| ${a.n} | ${cell(a.startedAt)} | ${cell(a.endedAt ?? '(not ended)')} | ${a.state ?? '-'} | ${cell(a.stopReason ?? '-')} | ${usd(a.budgetUsd)} | ${spend === null ? 'unknown' : usd(spend)} |`,
     );
@@ -278,18 +286,22 @@ function headerSection(ctx: Ctx, problem: string | undefined, skipped: number): 
     if (problem) out.push(`- ⚠ ${problem}`);
   } else {
     const attempts = attemptsOf(m);
-    const resumed = attempts.length > 1;
-    const start = (resumed ? attempts[0]?.startedAt : undefined) ?? m.startedAt ?? m.createdAt;
+    // a resume that was rolled back never ran: it is listed in the table, but it is not a run attempt
+    const ran = attempts.filter((a) => a.stopReason !== RESUME_FAILED);
+    const failedStarts = attempts.length - ran.length;
+    const resumed = ran.length > 1;
+    const start = (attempts.length > 1 ? attempts[0]?.startedAt : undefined) ?? m.startedAt ?? m.createdAt;
     const startMs = Date.parse(start);
     const endMs = m.endedAt ? Date.parse(m.endedAt) : NaN;
     out.push('## Run', '');
     out.push(`- Slug: ${code(m.slug)}`);
     out.push(`- Final state: **${m.state}** (phase: ${m.phase})`);
     out.push(`- Stop reason: ${m.stopReason ?? '(none recorded)'}`);
-    if (resumed) out.push(`- Resumed (${attempts.length} attempts)`);
+    if (resumed) out.push(`- Resumed (${ran.length} attempts${failedStarts > 0 ? `, ${failedStarts} failed to start` : ''})`);
+    else if (failedStarts > 0) out.push(`- Resume failed to start (${failedStarts}x)`);
     out.push(`- Started: ${start}`);
     out.push(`- Ended: ${m.endedAt ?? '(not ended)'}`);
-    if (resumed) out.push(`- Duration: ${attemptsDuration(attempts)}`);
+    if (resumed) out.push(`- Duration: ${attemptsDuration(ran)}`);
     else out.push(`- Duration: ${m.endedAt ? formatDuration(endMs - startMs) : 'unknown (run has no end time)'}`);
     out.push(`- Model: ${code(m.model)}`);
   }
@@ -326,7 +338,7 @@ function costSection(ctx: Ctx): string[] {
 
   const out: string[] = ['## Cost', ''];
   const attempts = m ? attemptsOf(m) : [];
-  const last = attempts.at(-1);
+  const last = lastRanAttempt(attempts);
   out.push(attempts.length > 1 ? `- Total (all attempts): **${usd(total)}**` : `- Total: **${usd(total)}**`);
   out.push(`- Estimated portion: ${usd(estimated)}`);
   if (m && last && attempts.length > 1) {
