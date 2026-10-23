@@ -20,7 +20,7 @@ import { corpusSafety } from './fixtures/profile/corpus-safety.ts';
  * Rows are only ever added or removed when the behaviour they record is fixed. Do not edit a row to make a failure go away.
  */
 
-type Kind = 'by-design' | 'fixed-in-T3b' | 'known-gap';
+type Kind = 'by-design' | 'known-gap';
 
 interface Exception {
   /** The resource, with the corpus placeholders (`{{WT}}`, `{{HOME}}`, ...). */
@@ -101,71 +101,6 @@ const EXCEPTIONS: Exception[] = [
     inCorpus: true,
     kind: 'by-design',
     reason: 'network git is refused by the guard (argv-aware), and the permission profile deliberately leaves it to the guard; the corpus pins only that the profile does not deny it',
-  },
-  // ---- today's false positives: the textual backstop matches a denied name after `/`, `=` or `.`. Allowed after T3b narrows it.
-  {
-    probe: 'ls docs/gh',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'CMD_WORD treats `/` as a boundary, so the directory docs/gh matches the denied command gh',
-  },
-  {
-    probe: 'ls tools/brew',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'same: `/brew` in a path argument',
-  },
-  {
-    probe: 'ls src/opencode',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'same: `/opencode` in a path argument',
-  },
-  {
-    probe: 'ls infra/docker',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'same: `/docker` in a path argument',
-  },
-  {
-    probe: 'ls infra/terraform',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'same: `/terraform` in a path argument',
-  },
-  {
-    probe: 'cat config/ssh',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: true,
-    kind: 'fixed-in-T3b',
-    reason: 'same: `/ssh` in a path argument',
-  },
-  {
-    probe: 'node cli.js --tool=docker',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: false,
-    kind: 'fixed-in-T3b',
-    reason: '`=` is a boundary too, so an option value that names a denied command matches',
-  },
-  {
-    probe: 'export TMPDIR=/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode',
-    corpus: 'allow',
-    guard: 'block',
-    inCorpus: false,
-    kind: 'fixed-in-T3b',
-    reason: 'the macOS temp dir ends in `/T/opencode`, which matches the denied command opencode after `/`',
   },
   // ---- known gaps: the guard allows these today and they stay recorded, not fixed here. `corpus` is the verdict we want.
   {

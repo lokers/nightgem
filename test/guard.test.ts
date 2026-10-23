@@ -280,6 +280,148 @@ describe('bypass corpus: forms of a denied command', () => {
   });
 });
 
+describe('path and assignment arguments that end in a denied name (#7)', () => {
+  const verdict = (command: string, c: GuardConfig = cfg) => decide({ tool: 'shell', input: { command } }, c).verdict;
+  // the same under the generic defaults alone and with the workspace-specific inputs (built lazily: `cfg` is set in beforeAll)
+  const configs: Array<[string, () => GuardConfig]> = [
+    ['workspace-specific inputs', () => cfg],
+    ['generic defaults', () => ({ ...cfg, safety: EMPTY_GUARD_SAFETY })],
+  ];
+
+  describe.each(configs)('%s', (_name, config) => {
+    it.each([
+      'ls docs/gh',
+      'cat config/ssh',
+      'ls infra/docker',
+      'ls infra/terraform',
+      'ls src/opencode',
+      'ls tools/brew',
+      'node cli.js --tool=docker',
+      'export TMPDIR=/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode',
+      'ls -la /opt/homebrew/bin/gh',
+      'cd infra/docker && ls',
+      'git log -- docs/gh',
+      'git -C tools/brew status',
+      'find infra/terraform -name x',
+      'grep -r foo src/opencode',
+      'ls docs/gh 2>/dev/null',
+      'ls docs/gh; ls src/opencode\nls tools/brew',
+      'if [ -d docs/gh ]; then ls docs/gh; fi',
+      'FOO=/usr/bin/gh ls',
+      'python3 x.py --tool=docker',
+    ])('allows %j', (command) => {
+      expect(verdict(command, config()), command).toBe('allow');
+    });
+
+    it.each([
+      // the denied command next to the argument, in every spelling
+      'ls docs/gh; /usr/bin/gh pr list',
+      'ls docs/gh; gh pr list',
+      'ls docs/gh && /usr/bin/gh pr list',
+      'ls docs/gh | /usr/bin/gh pr list',
+      'ls docs/gh\n/usr/bin/gh pr list',
+      'ls docs/gh & /usr/bin/gh pr list',
+      '(ls docs/gh; /usr/bin/gh pr list)',
+      'if ls docs/gh; then /usr/bin/gh pr list; fi',
+      // an execution sink on the line
+      'ls docs/gh | sh',
+      'ls docs/gh | bash -s',
+      'ls docs/gh | xargs /usr/bin/gh',
+      'ls docs/gh | xargs -I{} /usr/bin/gh {}',
+      'find docs/gh -exec /usr/bin/gh {} \\;',
+      'find . -execdir /usr/bin/gh {} +',
+      'find . -ok /usr/bin/gh {} \\;',
+      'X=/usr/bin/gh; $X pr list',
+      'X=/usr/bin/gh\n$X pr list',
+      'X=docs/gh; ls; ${X} pr list',
+      'export TMPDIR=/x/opencode && opencode run x',
+      'export TMPDIR=/x/opencode; /usr/local/bin/opencode run x',
+      'ls infra/docker; /usr/local/bin/docker ps',
+      'cat config/ssh; /usr/bin/ssh host',
+      'ls docs/gh <<< x | sh',
+      'sh <<< /usr/bin/gh',
+      'ls <(/usr/bin/gh pr list)',
+      'ls docs/gh `/usr/bin/gh pr list`',
+      'ls docs/gh $(/usr/bin/gh pr list)',
+      'eval /usr/bin/gh pr list',
+      'source /usr/bin/gh',
+      '. /usr/bin/gh',
+      'awk BEGIN{system(/usr/bin/gh)}',
+      'make GH=/usr/bin/gh',
+      'npm run x --script-shell=/usr/bin/gh',
+      'npx -c /usr/bin/gh',
+      'git rebase -x /usr/bin/gh main',
+      'git submodule foreach /usr/bin/gh pr list',
+      'git bisect run /usr/bin/gh',
+      'git -c core.pager=/usr/bin/gh log',
+      'git difftool --extcmd=/usr/bin/gh',
+      'tar --use-compress-program=/usr/bin/gh -cf x.tar .',
+      // exec-hook assignments
+      'PAGER=/usr/bin/gh git log',
+      'GIT_PAGER=/usr/bin/gh git log',
+      'export GIT_PAGER=/usr/bin/gh; git log',
+      'export EDITOR=/usr/bin/gh; git commit',
+      'VISUAL=/usr/bin/gh git commit',
+      'SHELL=/usr/bin/gh make',
+      'export npm_config_script_shell=/usr/bin/gh; npm test',
+      'export PATH=/x/gh; ls',
+      'git log --pager=/usr/bin/gh',
+      // wrappers, unknown commands, interpreters
+      'sudo /usr/bin/gh pr list',
+      'env /usr/bin/gh pr list',
+      'command /usr/bin/gh pr list',
+      'nohup /usr/bin/gh pr list',
+      'setsid /usr/bin/gh pr list',
+      'doas /usr/bin/gh pr list',
+      'cp /usr/bin/gh x',
+      'ln -s /usr/bin/gh x',
+      'install /usr/bin/gh x',
+      'node /opt/homebrew/bin/codex',
+      'node --require=/usr/lib/gh x.js',
+      'node x.js --tool=/x/docker',
+      'node -e 1 --tool=docker',
+      'python3 /usr/bin/gh',
+      'python3 -m pty /usr/bin/gh',
+      'python3 -c 1 --tool=docker',
+      'rg --pre /usr/bin/gh x',
+      'git grep -O/usr/bin/gh x',
+      'git config core.pager /usr/bin/gh',
+      // a script written for a later run, an alias, a function
+      'echo /usr/bin/gh pr list > x.sh; chmod +x x.sh; ./x.sh',
+      'ls docs/gh > /usr/bin/gh',
+      'ls docs/gh >> x.sh',
+      'alias g=/usr/bin/gh; g pr list',
+      'g() { /usr/bin/gh; }; g',
+      // text the relaxation does not read: quotes, expansions, comments
+      'ls "docs/gh"',
+      "ls 'infra/docker'",
+      'ls docs/\\gh',
+      'ls $HOME/docs/gh',
+      'ls $(echo docs/gh)',
+      'ls docs/gh # /usr/bin/gh',
+    ])('blocks %j', (command) => {
+      expect(verdict(command, config()), command).toBe('block');
+    });
+  });
+
+  it('keeps blocking the denied command in a heredoc body or an inner string even when the line also has a plain path argument', () => {
+    for (const command of [
+      "ls docs/gh; sh -c 'ls src/opencode'",
+      "ls docs/gh; python3 - <<'PY'\nimport os\nos.system('/usr/bin/gh pr list')\nPY",
+      "ls docs/gh; bash <<'EOF'\n/usr/bin/gh pr list\nEOF",
+    ]) {
+      expect(verdict(command), command).toBe('block');
+    }
+  });
+
+  it('applies to the main command text only: a denied path inside an inner string is still a command', () => {
+    expect(checkShellCommand('sh -c "ls docs/gh"', cfg)).toMatch(/gh is forbidden/);
+    expect(checkShellCommand('eval ls docs/gh', cfg)).toMatch(/gh is forbidden/);
+    expect(checkShellCommand('ls docs/gh', cfg)).toBeNull();
+    expect(checkShellCommand('ls docs/gh', cfg, 1)).toMatch(/gh is forbidden/);
+  });
+});
+
 describe('secret locations', () => {
   const sh = (command: string, c: GuardConfig = cfg) => decide({ tool: 'shell', input: { command } }, c);
 

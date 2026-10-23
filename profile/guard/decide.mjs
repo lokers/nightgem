@@ -430,6 +430,111 @@ export function commandHead(words) {
 
 const stripQuotes = (s) => s.replace(/['"\\]/g, '');
 const CMD_WORD = (name) => new RegExp(`(?:^|[\\s;&|()\`'"/=])${escapeRe(name)}(?=$|[\\s;&|()\`'"])`);
+/** The same match without `/` and `=` as boundaries: the name stands alone, so it can be a command word. Never relaxed. */
+const CMD_WORD_STRICT = (name) => new RegExp(`(?:^|[\\s;&|()\`'"])${escapeRe(name)}(?=$|[\\s;&|()\`'"])`);
+/** Only the matches `CMD_WORD` has because of `/` or `=`: the name directly after one of them (`docs/gh`, `--tool=docker`). */
+const PATH_ARG_MATCH = (name) => new RegExp(`(?<=[/=])${escapeRe(name)}(?=$|[\\s;&|()\`'"])`, 'g');
+
+// ---------------------------------------------------------------------------
+// Path and assignment arguments that merely END in a denied name (`ls docs/gh`, `--tool=docker`, `TMPDIR=/x/T/opencode`)
+//
+// `CMD_WORD` also matches after `/` and `=` because a path-spelled command (`/usr/bin/gh`) and an assignment fed to a
+// wrapper must stay blocked. The relaxation below lets a match through only when it is certainly an ARGUMENT of a command
+// that cannot run it. It is a positive proof, not a list of exceptions: anything it cannot prove falls back to a block.
+//
+// It applies to the main command text only (never to a heredoc body, an inner string or the quote-stripped variant), and
+// only when ALL of these hold:
+//  1. the text has no quote, backslash, `$`, backtick, heredoc or process substitution (nothing the tokenizer could read
+//     differently from the shell, no dynamic command word, no here-string);
+//  2. EVERY simple command in the text starts with a command word from PATH_ARG_HEADS (read/navigate/inspect tools that
+//     run none of their arguments). A wrapper, shell, `eval`, `source`/`.`, `xargs`, `make`, `npm`/`npx`, `awk`, a
+//     path-spelled word, `alias`, a function definition... is not in the list, so a line using one is never relaxed;
+//  3. `git` only with a read-only subcommand and no `-c`; `find` without `-exec*`/`-ok*`; `node`/`python` without an
+//     inline-code or module flag (`-c`, `-e`, `-p`, `-m`, `--eval`, ...). An interpreter RUNS a path argument
+//     (`node ~/.local/bin/<cli>` is that cli), so for `node`/`python` only `--opt=name` is relaxed, never a path ending in the name;
+//  4. the only redirect target is /dev/null (no file is written with the name in it for a later `./x`);
+//  5. no word anywhere is an execution sink word (shells, wrappers, `xargs`, `awk`, ...);
+//  6. an `NAME=...` or `--opt=...` value is only relaxed when NAME is no exec hook (`*PAGER`, `*EDITOR`, `SHELL`, `GIT_*`,
+//     `npm_config_*`, `PATH`, `--extcmd`, `--exec-path`, `--use-compress-program`, ...);
+//  7. every match is accounted for: the matches inside the accepted words equal the matches in the text (a match in a
+//     comment, a redirect target or anything else the parse did not classify keeps the block).
+// ---------------------------------------------------------------------------
+
+/** Command words whose arguments are never run. Exact words: `./ls` or `/x/gh/ls` is not `ls`. cp/mv/ln/install are left out on purpose (they copy a denied binary). */
+const PATH_ARG_HEADS = new Set([
+  'ls', 'cat', 'cd', 'pushd', 'popd', 'pwd', 'echo', 'printf', 'head', 'tail', 'wc', 'stat', 'file', 'du', 'tree',
+  'grep', 'egrep', 'fgrep', 'cut', 'tr', 'basename', 'dirname', 'realpath', 'readlink', 'test', '[', '[[', 'true', 'false',
+  'mkdir', 'touch', 'rm', 'rmdir', 'sleep', 'export', 'declare', 'typeset', 'readonly', 'local', 'unset',
+  'git', 'find', 'node', 'python', 'python3',
+]);
+/** Control-flow words that precede a command (the command after them must pass too). */
+const PATH_ARG_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'fi', 'while', 'until', 'do', 'done', '!']);
+/** Words that run something. Any of them anywhere in the text (as a whole word, whatever its position) ends the relaxation. A path that merely ends in one (`config/ssh`) is an ordinary argument. */
+const EXEC_SINK_WORDS = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh', 'ash', 'eval', 'source', 'exec', 'xargs', 'env', 'command', 'builtin',
+  'nohup', 'time', 'nice', 'timeout', 'stdbuf', 'sudo', 'doas', 'caffeinate', 'arch', 'script', 'setsid', 'parallel', 'watch', 'make',
+  'gmake', 'npm', 'npx', 'pnpm', 'pnpx', 'yarn', 'bun', 'bunx', 'awk', 'gawk', 'mawk', 'nawk', 'perl', 'ruby', 'php', 'lua',
+  'osascript', 'ssh', 'alias', 'function', 'trap',
+]);
+/** Names of options and variables that make a program run what their value names. Tested on the text before the `=` that precedes the match. */
+const EXEC_HOOK_KEY_RE =
+  /pager|editor|visual|browser|shell|exec|cmd|command|program|helper|ssh|rsh|hook|askpass|proxy|textconv|filter|launcher|wrapper|compress|script|pack|^-*path$|^git_|^npm_|^bash_env$|^env$|^ld_|^dyld_|^less|^prompt|^ps\d|ifs/i;
+const INTERPRETER_HEADS = new Set(['node', 'python', 'python3']);
+/** Options of an interpreter whose value is code to load. */
+const INTERPRETER_LOAD_KEY_RE = /require|import|loader|preload|^-*r$|inspect|run|test|check|plugin|config/i;
+/** Read-only git subcommands (no hook, pager, editor or transport of their own). */
+const GIT_READ_SUBS = new Set([
+  'status', 'log', 'diff', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'branch', 'blame', 'describe', 'shortlog',
+  'cat-file', 'diff-tree', 'merge-base', 'add', 'restore', 'checkout', 'switch',
+]);
+
+function pathArgHeadOk(head, args) {
+  if (!PATH_ARG_HEADS.has(head)) return false;
+  const vs = args.map((a) => a.v);
+  if (head === 'git') {
+    if (vs.some((v) => /^-c/.test(v) || /^--(?:config-env|exec-path)/.test(v))) return false;
+    return GIT_READ_SUBS.has(gitInvocation(vs).sub);
+  }
+  if (head === 'find') return !vs.some((v) => /^-(?:exec|ok)/.test(v));
+  if (head === 'node' || head === 'python' || head === 'python3') {
+    return !vs.some((v) => v === '-' || /^-[A-Za-z]*[ceEpm]/.test(v) || /^--(?:eval|print|command|exec|interactive|run|test)/.test(v));
+  }
+  return true;
+}
+
+/** True when every `/name` or `=name` match in `text` sits in a word that provably cannot run it (see the block comment above). */
+function onlyPathArguments(text, name) {
+  if (/[^\x20-\x7e\t\n]|['"\\$`]|<<|<\(|>\(/.test(text)) return false;
+  const match = PATH_ARG_MATCH(name);
+  const total = [...text.matchAll(match)].length;
+  let accepted = 0;
+  const tally = (word, interpreter = false) => {
+    for (const m of word.v.matchAll(PATH_ARG_MATCH(name))) {
+      const before = word.v.slice(0, m.index);
+      const eq = before.indexOf('=');
+      if (eq !== -1 && EXEC_HOOK_KEY_RE.test(before.slice(0, eq))) return false;
+      // an interpreter loads or runs a path argument: only a bare `--opt=name` value is a plain argument
+      if (interpreter && (!before.endsWith('=') || INTERPRETER_LOAD_KEY_RE.test(before.slice(0, eq)))) return false;
+      accepted++;
+    }
+    return true;
+  };
+  for (const c of simpleCommands(tokenize(text))) {
+    for (const r of c.redirs) if (!r.target || r.target.dyn || r.target.v !== '/dev/null') return false;
+    let i = 0;
+    while (i < c.words.length && (ASSIGN_RE.test(c.words[i].v) || PATH_ARG_KEYWORDS.has(c.words[i].v))) {
+      if (!tally(c.words[i])) return false;
+      i++;
+    }
+    if (c.words.slice(i).some((w) => EXEC_SINK_WORDS.has(w.v))) return false;
+    if (i < c.words.length) {
+      if (!pathArgHeadOk(c.words[i].v, c.words.slice(i + 1))) return false;
+      const interpreter = INTERPRETER_HEADS.has(c.words[i].v);
+      for (const w of c.words.slice(i + 1)) if (!tally(w, interpreter)) return false;
+    }
+  }
+  return accepted === total;
+}
 // Generic defaults (common third-party CLIs): forge CLIs, agent runners and the `acli` tracker CLI are denied
 // wherever the word appears as a command word. The profile layer denies the same names (src/profile.ts); their login dirs
 // are secret roots (secrets.mjs) and read-denied in the sandbox. `deny.commands` from the user profile are appended
@@ -475,8 +580,11 @@ const PUSH_TOKEN_RE = new RegExp(`${TOKEN_START}push${TOKEN_END}`);
 /** Same delimiting for `stash`: `printf 'git stash' | sh` must not depend on the profile glob alone. */
 const STASH_TOKEN_RE = new RegExp(`${TOKEN_START}stash${TOKEN_END}`);
 
-function checkPatterns(raw, cfg) {
+function checkPatterns(raw, cfg, allowPathArgs = false) {
   const variants = [raw, stripQuotes(raw)];
+  // path/assignment arguments are only ever relaxed in the main command text, and only when stripping quotes changes nothing
+  // (so both variants are the same text and the parse below is the parse of what the shell reads)
+  const relax = allowPathArgs && variants[1] === raw;
   for (const v of variants) {
     // textual backstop for pushes fed to a shell as data (`printf 'git push' | sh`) and for wrapper spellings argv parsing misses
     if (/(?<![\w.])git(?!\w)/.test(v) && PUSH_TOKEN_RE.test(v)) return 'git push is forbidden (git and a standalone push token both appear)';
@@ -486,7 +594,9 @@ function checkPatterns(raw, cfg) {
       return 'git -c remote.*/url.*/credential.*/alias.* overrides are forbidden';
     if (/\bGIT_(?:CONFIG|SSH|ASKPASS|EXEC_PATH|PROXY_COMMAND)/.test(v)) return 'overriding git transport environment is forbidden';
     for (const name of deniedCommands(cfg)) {
-      if (CMD_WORD(name).test(v)) return `command ${name} is forbidden`;
+      if (!CMD_WORD(name).test(v)) continue;
+      if (relax && !CMD_WORD_STRICT(name).test(v) && onlyPathArguments(v, name)) continue;
+      return `command ${name} is forbidden`;
     }
     if (/\b(?:curl|wget)\b[^\n]*(?:^|[\s'"=])file:/i.test(v)) return 'curl/wget of file: URLs is forbidden (reads local files)';
     const shellPattern = shellPatternReason(v, cfg);
@@ -1082,7 +1192,7 @@ export function checkShellCommand(cmd, cfg, depth = 0) {
   if (depth > 4) return 'shell command nests too deeply';
   const hd = splitHeredocs(cmd);
   const text = hd.text;
-  const pat = checkPatterns(text, cfg);
+  const pat = checkPatterns(text, cfg, depth === 0);
   if (pat) return pat;
   const sem = checkCommandSemantics(text);
   if (sem) return sem;
