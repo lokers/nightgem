@@ -551,8 +551,6 @@ class Run {
       budgetUsd: this.d.ledger.budgetUsd,
       costAtStartUsd: this.d.ledger.costAtStartUsd,
       baselineUsd: this.d.ledger.baselineUsd,
-      attemptSpendUsd: this.d.ledger.attemptSpendUsd,
-      cumulativeUsd: this.d.ledger.cumulativeUsd,
       priorCostUsd: manifest.costUsd,
     });
     this.startHeartbeat();
@@ -600,7 +598,7 @@ class Run {
     try {
       const flags = this.st.readControlFlags(this.d.paths.controlDir);
       const set = [flags.hardStop ? 'hardStop' : '', flags.softStop ? 'softStop' : ''].filter(Boolean);
-      if (set.length > 0) return `control.json still has ${set.join(' and ')} set; the resume CLI must reset the stop flags before the attempt starts`;
+      if (set.length > 0) return `a stop flag from an earlier process is still set in control.json (${set.join(' and ')}; a crash during a stop?); the attempt is closed as failed. Run \`nightgem resume <slug>\` or \`stop\``;
     } catch (err) {
       return `control.json cannot be read: ${errMsg(err)}`;
     }
@@ -1220,7 +1218,9 @@ class Run {
    * - `rootSessions[].costUsd` is the cumulative cost of that root's PHASE across all attempts (every root of a phase shows
    *   the same figure, as before). It is not a per-root or per-attempt cost: nothing may sum it. The report reads
    *   `cost.jsonl` and `costUsd`, never this field.
-   * - the open (last) attempt's `costUsd` is the live attempt spend (multiplied, not cumulative).
+   *   `costEstimatedUsd` is monotonic for the same reason.
+   * - the open (last) attempt's `costUsd` is the live attempt spend (multiplied, not cumulative). It never goes down either:
+   *   a restart inside the same attempt starts from an empty ledger and must not erase what the first process recorded.
    */
   private recordLedger(): void {
     const total = this.d.ledger.total();
@@ -1228,21 +1228,22 @@ class Run {
     const phases = this.d.ledger.perPhase((id) => this.phaseOfSession(id));
     const attemptSpend = this.d.ledger.attemptSpendUsd;
     const cur = this.manifestState;
+    const estimated = total.estimatedUsd * mult;
     const cumulative = Math.max(total.effectiveUsd, cur?.costUsd ?? 0);
     const last = cur?.attempts?.at(-1);
     const unchanged =
       cur !== undefined &&
       cur.costUsd === cumulative &&
-      cur.costEstimatedUsd === total.estimatedUsd * mult &&
+      cur.costEstimatedUsd === Math.max(cur.costEstimatedUsd, estimated) &&
       cur.rootSessions.every((r) => r.costUsd === Math.max(r.costUsd, phases[r.phase].effectiveUsd)) &&
-      (last === undefined || last.endedAt !== undefined || last.costUsd === attemptSpend);
+      (last === undefined || last.endedAt !== undefined || (last.costUsd ?? 0) >= attemptSpend);
     if (unchanged) return;
     this.safeUpdate((m) => {
       m.costUsd = Math.max(total.effectiveUsd, m.costUsd);
-      m.costEstimatedUsd = total.estimatedUsd * mult;
+      m.costEstimatedUsd = Math.max(m.costEstimatedUsd, estimated);
       for (const r of m.rootSessions) r.costUsd = Math.max(r.costUsd, phases[r.phase].effectiveUsd);
       const open = m.attempts?.at(-1);
-      if (open && open.endedAt === undefined) open.costUsd = attemptSpend;
+      if (open && open.endedAt === undefined) open.costUsd = Math.max(open.costUsd ?? 0, attemptSpend); // never down: a restart inside this attempt starts from an empty ledger
     });
   }
 
@@ -1396,7 +1397,7 @@ class Run {
         open.endedAt = m.endedAt;
         open.state = isTerminalRunState(fin.state) ? fin.state : 'failed';
         if (fin.stopReason !== undefined) open.stopReason = fin.stopReason;
-        open.costUsd = attemptSpendUsd;
+        open.costUsd = Math.max(open.costUsd ?? 0, attemptSpendUsd);
       }
     });
     this.log('final', { ...fin });
