@@ -115,6 +115,14 @@ export function xdgDataHome(slug: string, home: string = homedir()): string {
   return join(controlDir(slug, home), 'xdg-data');
 }
 
+/**
+ * `<controlDir>/bin`: the run's PATH shims (a `mktemp` copy, T2 / #7). The sandbox does not allow writes to it (only
+ * `xdg-data` below the control dir is writable), so agents cannot replace a shim. Additive helper; takes the control dir itself.
+ */
+export function shimBinDir(controlDirPath: string): string {
+  return join(controlDirPath, 'bin');
+}
+
 // --- Artifact files -----------------------------------------------------------
 
 export interface RunPaths {

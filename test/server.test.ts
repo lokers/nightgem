@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { SafetyInputs } from '../src/contracts.ts';
 import { EXPECTED_OPENCODE_VERSION } from '../src/doctor.ts';
-import { controlDir, runDir, xdgDataHome } from '../src/paths.ts';
+import { controlDir, runDir, shimBinDir, xdgDataHome } from '../src/paths.ts';
 import { isPidAlive } from '../src/state.ts';
 import { agentModelOverrides } from '../src/wiring.ts';
 import {
@@ -16,8 +16,11 @@ import {
   ServerStartError,
   buildServeInvocation,
   buildServerEnv,
+  DEFAULT_REPO_ROOT,
   descendantPids,
+  installRunShims,
   prepareRunServer,
+  resetRunTmpDir,
   redactSecrets,
   runTmpDir,
   startRunServer,
@@ -88,9 +91,26 @@ describe('buildServerEnv', () => {
   });
 
   it('has no ~/.local/bin in PATH', () => {
-    expect(env.PATH).toBe('/usr/bin:/opt/homebrew/bin:/bin');
+    expect(env.PATH).toBe(`${shimBinDir(controlDir(SLUG, HOME))}:/usr/bin:/opt/homebrew/bin:/bin`);
     expect(env.PATH?.split(':')).not.toContain(`${HOME}/.local/bin`);
     expect(stripPathEntry(`${HOME}/.local/bin:/a:${HOME}/.local/bin/`, `${HOME}/.local/bin`)).toBe('/a');
+  });
+
+  it('puts the run shim dir (<controlDir>/bin) first in PATH, ahead of everything inherited', () => {
+    const dir = `${controlDir(SLUG, HOME)}/bin`;
+    expect(shimBinDir(controlDir(SLUG, HOME))).toBe(dir);
+    expect(env.PATH?.split(':')[0]).toBe(dir);
+    // a PATH that already lists it, or any other order, still gets exactly one copy in front
+    const e = buildServerEnv({ ...envInput(), baseEnv: { ...envInput().baseEnv, PATH: `/opt/homebrew/bin:/usr/bin` } });
+    expect(e.PATH).toBe(`${dir}:/opt/homebrew/bin:/usr/bin`);
+    // the shim dir is not writable by the sandbox: it is the control dir's child, only xdg-data is allowed
+    expect(dir.startsWith(`${xdgDataHome(SLUG, HOME)}/`)).toBe(false);
+  });
+
+  it('points TMPDIR and zsh TMPPREFIX at the run tmp dir', () => {
+    const tmp = `${controlDir(SLUG, HOME)}/tmp`;
+    expect(env.TMPDIR).toBe(tmp);
+    expect(env.TMPPREFIX).toBe(`${tmp}/zsh`);
   });
 
   it('sets every push-disable variable, overriding inherited credentials', () => {
@@ -317,6 +337,41 @@ describe('prepareRunServer', () => {
     expect(prep.env.TMPDIR).toBe(tmpDir);
   });
 
+  it('wipes and recreates the run tmp dir (0700) at every start, whatever an earlier server left in it', async () => {
+    const home = freshHome();
+    const tmpDir = join(root, 'wipe-tmp');
+    mkdirSync(join(tmpDir, 'old-dir'), { recursive: true });
+    writeFileSync(join(tmpDir, 'old-file'), 'x');
+    writeFileSync(join(tmpDir, 'old-dir', 'nested'), 'x');
+    chmodSync(tmpDir, 0o755);
+    const input = { slug: SLUG, home, workspaceRoot: join(home, 'workspace'), safety: safetyFor(join(home, 'workspace')), model: 'a/b', smallModel: 'a/c', opencodeBin: '/bin/oc', sandbox: false, tmpDir, baseEnv: baseEnv() };
+    await prepareRunServer(input);
+    expect(readdirSync(tmpDir)).toEqual([]);
+    expect(statSync(tmpDir).mode & 0o777).toBe(0o700);
+    writeFileSync(join(tmpDir, 'again'), 'x');
+    await prepareRunServer(input);
+    expect(readdirSync(tmpDir)).toEqual([]);
+  });
+
+  it('installs the mktemp shim into <controlDir>/bin as a read-only, executable copy of profile/shims/mktemp, and keeps PATH pointing at it', async () => {
+    const home = freshHome();
+    const prep = await prepareRunServer({ slug: SLUG, home, workspaceRoot: join(home, 'workspace'), safety: safetyFor(join(home, 'workspace')), model: 'a/b', smallModel: 'a/c', opencodeBin: '/bin/oc', sandbox: true, port: 45680, baseEnv: baseEnv() });
+    const dir = join(controlDir(SLUG, home), 'bin');
+    expect(prep.env.PATH?.split(':')[0]).toBe(dir);
+    const shim = join(dir, 'mktemp');
+    expect(statSync(shim).mode & 0o777).toBe(0o555);
+    expect(readFileSync(shim, 'utf8')).toBe(readFileSync(join(DEFAULT_REPO_ROOT, 'profile', 'shims', 'mktemp'), 'utf8'));
+    // the sandbox profile grants no write on the shim dir (it is the control dir's child; only xdg-data is below it)
+    const sb = readFileSync(prep.sandboxProfilePath!, 'utf8');
+    expect(sb).not.toContain(dir);
+    // a second start replaces a stale or tampered copy
+    chmodSync(shim, 0o755);
+    writeFileSync(shim, '#!/bin/sh\necho pwned\n');
+    await prepareRunServer({ slug: SLUG, home, workspaceRoot: join(home, 'workspace'), safety: safetyFor(join(home, 'workspace')), model: 'a/b', smallModel: 'a/c', opencodeBin: '/bin/oc', sandbox: true, port: 45680, baseEnv: baseEnv() });
+    expect(readFileSync(shim, 'utf8')).not.toContain('pwned');
+    expect(statSync(shim).mode & 0o777).toBe(0o555);
+  });
+
   it('MCP servers of the safety inputs are switched off in the rendered run config (slim disabled_mcps + tool denies), without values', async () => {
     const home = freshHome();
     const safety = { ...safetyFor(join(home, 'workspace')), mcpServerNames: ['atlassian', 'my.server'] };
@@ -454,4 +509,58 @@ describe('startRunServer (fake opencode)', () => {
     expect(err).toBeInstanceOf(ServerStartError);
     expect((err as ServerStartError).code).toBe('exited');
   }, 40_000);
+});
+
+describe('resetRunTmpDir', () => {
+  it('refuses a dir that is, or contains, a protected path, or is too shallow', () => {
+    const base = mkdtempSync(join(tmpdir(), 'ng-reset-'));
+    try {
+      const keep = join(base, 'keep');
+      mkdirSync(keep);
+      writeFileSync(join(keep, 'f'), 'x');
+      expect(() => resetRunTmpDir(keep, [keep])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir(base, [keep])).toThrow(/contains/);
+      expect(() => resetRunTmpDir('/', [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir('/tmp', [])).toThrow(/Refusing/);
+      expect(() => resetRunTmpDir('relative/dir', [])).toThrow(/Refusing/);
+      expect(readFileSync(join(keep, 'f'), 'utf8')).toBe('x');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('unlinks a symlink at the path instead of following it', () => {
+    const base = mkdtempSync(join(tmpdir(), 'ng-reset-'));
+    try {
+      const target = join(base, 'target');
+      mkdirSync(target);
+      writeFileSync(join(target, 'f'), 'x');
+      const link = join(base, 'nightgem-link');
+      symlinkSync(target, link);
+      resetRunTmpDir(link, []);
+      expect(readFileSync(join(target, 'f'), 'utf8')).toBe('x');
+      expect(statSync(link).isDirectory()).toBe(true);
+      expect(readdirSync(link)).toEqual([]);
+      expect(realpathSync(link)).toBe(link.replace(/^\/var\//, '/private/var/'));
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('installRunShims', () => {
+  it('copies each shim 0555 into <controlDir>/bin (0700) and is idempotent', () => {
+    const base = mkdtempSync(join(tmpdir(), 'ng-shim-'));
+    try {
+      const dir = installRunShims(base, DEFAULT_REPO_ROOT);
+      expect(dir).toBe(join(base, 'bin'));
+      expect(statSync(dir).mode & 0o777).toBe(0o700);
+      expect(readdirSync(dir)).toEqual(['mktemp']);
+      expect(statSync(join(dir, 'mktemp')).mode & 0o777).toBe(0o555);
+      installRunShims(base, DEFAULT_REPO_ROOT);
+      expect(statSync(join(dir, 'mktemp')).mode & 0o777).toBe(0o555);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

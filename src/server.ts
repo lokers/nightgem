@@ -11,10 +11,10 @@
  *   group; it walks the process tree under the server pid instead.
  */
 import { execa } from 'execa';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, copyFileSync, existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
@@ -22,7 +22,7 @@ import { TMP_PREFIX } from './brand.ts';
 import { RunApiError, createRunApi, type RunClient } from './client.ts';
 import { parseModelRef, type SafetyInputs } from './contracts.ts';
 import { EXPECTED_OPENCODE_VERSION } from './doctor.ts';
-import { runPaths, type RunPaths } from './paths.ts';
+import { runPaths, shimBinDir, type RunPaths } from './paths.ts';
 import {
   DEFAULT_NOPUSH_PREFIXES,
   buildGuardEnv,
@@ -120,7 +120,8 @@ export function buildServerEnv(i: BuildServerEnvInput): Record<string, string> {
   }
   env.HOME = i.home;
   // PATH without ~/.local/bin (that is where user-installed wrappers such as gh helpers live)
-  env.PATH = stripPathEntry(env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin', `${i.home}/.local/bin`);
+  // then the run's shim dir in front (`mktemp`, see installRunShims): shells resolve a bare `mktemp` there first
+  env.PATH = `${shimBinDir(i.paths.controlDir)}:${stripPathEntry(env.PATH ?? '/usr/bin:/bin:/usr/sbin:/sbin', `${i.home}/.local/bin`)}`;
 
   Object.assign(env, NON_INTERACTIVE_ENV);
   Object.assign(
@@ -141,6 +142,8 @@ export function buildServerEnv(i: BuildServerEnvInput): Record<string, string> {
   env.OPENCODE_SERVER_PASSWORD = i.password;
   env.XDG_DATA_HOME = i.paths.xdgDataHome;
   env.TMPDIR = i.tmpDir;
+  // zsh (the agent shell) writes heredoc temp files to `$TMPPREFIX` + random and ignores TMPDIR (default /tmp/zsh, outside the sandbox)
+  env.TMPPREFIX = join(i.tmpDir, 'zsh');
   return env;
 }
 
@@ -290,6 +293,42 @@ export function runTmpDir(slug: string, base: string = tmpdir()): string {
   return join(real, `${TMP_PREFIX}${slug}`);
 }
 
+/**
+ * Empty the run tmp dir and recreate it 0700. Called at every server start so a run never sees files an earlier server left.
+ * Refuses a dir that is, or contains, the home, workspace or control dir, or that is too shallow to be a run tmp dir. A
+ * symlink at the path is unlinked, never followed.
+ */
+export function resetRunTmpDir(tmpDir: string, protect: readonly string[]): void {
+  if (!isAbsolute(tmpDir) || tmpDir.split(sep).filter(Boolean).length < 2) throw new Error(`Refusing to reset tmp dir "${tmpDir}"`);
+  for (const p of protect) {
+    const rel = relative(tmpDir, p);
+    if (rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))) throw new Error(`Refusing to reset tmp dir "${tmpDir}": it contains "${p}"`);
+  }
+  rmSync(tmpDir, { recursive: true, force: true });
+  mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
+  chmodSync(tmpDir, 0o700);
+}
+
+/** The package's PATH shims (`profile/shims/<name>`), copied into the control dir at run start. */
+export const RUN_SHIMS = ['mktemp'] as const;
+
+/**
+ * Copy the shims to `<controlDir>/bin` as 0555 files. The control dir is outside every sandbox write allowance (only its
+ * `xdg-data` child is writable), so agents cannot edit them. Each copy replaces the previous one.
+ */
+export function installRunShims(controlDirPath: string, repoRoot: string): string {
+  const dir = shimBinDir(controlDirPath);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  chmodSync(dir, 0o700);
+  for (const name of RUN_SHIMS) {
+    const dest = join(dir, name);
+    rmSync(dest, { force: true });
+    copyFileSync(join(repoRoot, 'profile', 'shims', name), dest);
+    chmodSync(dest, 0o555);
+  }
+  return dir;
+}
+
 export function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = createServer();
@@ -325,8 +364,8 @@ export async function prepareRunServer(input: StartRunServerInput): Promise<Prep
   mkdirSync(paths.controlDir, { recursive: true, mode: 0o700 });
   chmodSync(paths.controlDir, 0o700);
   mkdirSync(paths.xdgDataHome, { recursive: true, mode: 0o700 });
-  mkdirSync(tmpDir, { recursive: true, mode: 0o700 });
-  chmodSync(tmpDir, 0o700);
+  resetRunTmpDir(tmpDir, [input.home, input.workspaceRoot, paths.controlDir]);
+  installRunShims(paths.controlDir, repoRoot);
   mkdirSync(paths.runDir, { recursive: true });
 
   if (!existsSync(join(paths.runDir, '.git'))) {

@@ -1,0 +1,55 @@
+#!/bin/sh
+# nightgem mktemp shim (#7). BSD mktemp with no template writes to the per-user temp dir (confstr), ignoring $TMPDIR, and
+# that dir is outside the run's sandbox write boundary. With no template and no -p/--tmpdir this runs the real mktemp with
+# `-p "$TMPDIR"` (the run tmp dir). Anything else (a template, an explicit -p, an unknown option) is passed through untouched,
+# so `mktemp "$TMPDIR/x.XXXXXX"` and `mktemp /tmp/x.XXXXXX` behave exactly as before (the latter is still refused by the sandbox).
+# The real binary is called by absolute path; this file is a copy kept in the control dir, which agents cannot write.
+real=/usr/bin/mktemp
+
+[ -n "${TMPDIR-}" ] || exec "$real" "$@"
+
+has_p=0
+template=0
+skip=0
+after_dd=0
+for a in "$@"; do
+  if [ "$skip" = 1 ]; then
+    skip=0
+    continue
+  fi
+  if [ "$after_dd" = 1 ]; then
+    template=1
+    continue
+  fi
+  case $a in
+    --) after_dd=1 ;;
+    --tmpdir | --tmpdir=*) has_p=1 ;;
+    --directory | --quiet | --dry-run) ;;
+    --*) exec "$real" "$@" ;; # unknown long option: let the real mktemp report it
+    -?*)
+      # a cluster of short options; -p/-t take the rest of the word, or the next word when nothing follows
+      rest=${a#-}
+      while [ -n "$rest" ]; do
+        c=${rest%"${rest#?}"}
+        rest=${rest#?}
+        case $c in
+          p)
+            has_p=1
+            [ -n "$rest" ] || skip=1
+            break
+            ;;
+          t)
+            [ -n "$rest" ] || skip=1
+            break
+            ;;
+        esac
+      done
+      ;;
+    *) template=1 ;; # a bare word (or a lone "-") is a template
+  esac
+done
+
+if [ "$template" = 1 ] || [ "$has_p" = 1 ]; then
+  exec "$real" "$@"
+fi
+exec "$real" -p "$TMPDIR" "$@"
