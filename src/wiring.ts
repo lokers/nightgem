@@ -796,8 +796,8 @@ export function tmpFileProbes(tmpDir: string, nonce: string): ShellProbe[] {
   const heredocFile = `${q}/${TMP_PREFIX}heredoc-probe-${nonce}`;
   // a heredoc run by another shell: the here-document needs that shell's own temp file, the redirect target is writable.
   // `cd "$TMPDIR"` first, a writable cwd as in real runs (the run dir or a worktree): macOS bash 3.2 puts the here-document file
-  // in the cwd when it can, and there is deliberately no sandbox rule for its other location (/private/var/tmp), so an
-  // unwritable cwd cannot do heredocs (docs/safety-model.md, "Known limitations").
+  // in /private/var/tmp, which the sandbox deliberately refuses, and then falls back to the cwd if it is writable, so an
+  // unwritable cwd cannot do heredocs (docs/safety-model.md, "Residual risks").
   const otherShellHeredoc = (shell: string, tag: string): string => {
     const file = `${q}/${TMP_PREFIX}heredoc-probe-${tag}-${nonce}`;
     return ['cd "$TMPDIR" || exit 1', `f=${file}`, `${shell} -c 'cat <<EOF > "$1"`, 'canary', `EOF' _ "$f"`, '[ "$(cat "$f" 2>/dev/null)" = canary ]; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n');

@@ -32,8 +32,8 @@ describe.skipIf(!isDarwin)('sandbox temp paths (darwin, sandbox-exec)', () => {
   let worktree: string;
   const leftovers: string[] = [];
 
-  // Default cwd is the (unwritable) home. bash 3.2 puts a here-document in the cwd when it can write there; there is NO sandbox rule
-  // for its other location (/private/var/tmp), so the heredoc cases pass a writable cwd, as real runs have (run dir, worktree).
+  // Default cwd is the (unwritable) home. bash 3.2 puts a here-document in /private/var/tmp first, which has NO sandbox rule, and then
+  // falls back to the cwd if it is writable, so the heredoc cases pass a writable cwd, as real runs have (run dir, worktree).
   const sh = (shell: string, script: string, cwd: string = home): { status: number | null; out: string; err: string } => {
     const r = spawnSync(SANDBOX_EXEC, ['-f', prep.sandboxProfilePath!, shell, '-c', script], { env: prep.env, cwd, encoding: 'utf8', timeout: 30_000 });
     return { status: r.status, out: r.stdout, err: r.stderr };
@@ -165,6 +165,7 @@ describe.skipIf(!isDarwin)('sandbox temp paths (darwin, sandbox-exec)', () => {
         if (!canApply) ctx.skip();
         const r = sh('/bin/zsh', script, worktree);
         expect(r.status).not.toBe(0);
+        expect(r.err).toMatch(/not permitted/i);
         if (path) {
           let exists = true;
           try {
