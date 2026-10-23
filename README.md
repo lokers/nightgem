@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/brand/hero.png" alt="nightgem: a night shift at a gem factory. A foreman sends rough stones along conveyor belts to specialist workers, an inspector checks each gem, and a tray of finished gems waits for the morning." width="100%">
+<img src="assets/brand/hero.jpg" alt="nightgem, spec at dusk, gems at dawn: a night-shift gem factory. A foreman robot takes rough stones from a crate and sends them along conveyor lanes to cutting, grinding and polishing, through a central machine with robotic arms, to an inspector robot who checks a finished emerald under a loupe, next to screens showing a verified branch and a project report." width="100%">
 
 **Write a spec at dusk. Wake up to verified local branches.**
 

@@ -2,7 +2,7 @@
 
 Name: **nightgem** (always lowercase, one word). The idea: a night shift. A foreman hands rough stones to parallel specialists; in the morning there are cut gems (verified branches and a report).
 
-All SVGs are hand-authored (generated once, then kept as plain files), pure SVG, no fonts, scripts or embedded images. Open `preview.html` to see everything on dark and light backgrounds.
+All SVGs are hand-authored (generated once, then kept as plain files), pure SVG, no fonts, scripts or embedded images. The README hero is a raster illustration (`hero.jpg`), stored with its metadata stripped. Open `preview.html` to see everything on dark and light backgrounds.
 
 ## Palette (Dracula)
 
@@ -44,7 +44,7 @@ Roles: foreman (orchestrator) yellow hat, fixer orange, designer pink, explorer 
 - The mark works on dark and light. Use `logo-wordmark.svg` on dark, `logo-wordmark-light.svg` on light.
 - Do: use the files as is, scale proportionally, use the mono mark for one-colour contexts.
 - Don't: recolour the emerald, stretch, add shadows or outlines, rotate, put the full-colour mark on busy or green backgrounds, or re-typeset the wordmark (the letters are drawn paths; the dot of the "i" is a tiny emerald).
-- The name can change: only `logo-wordmark*.svg`, `hero.svg` (title and tagline) and `social-card.svg` carry it.
+- The name can change: `logo-wordmark*.svg` and `social-card.svg` carry it, and so does `hero.jpg` (title and tagline drawn into the image), which would need replacing.
 
 ## Files
 
@@ -53,17 +53,17 @@ Roles: foreman (orchestrator) yellow hat, fixer orange, designer pink, explorer 
 | `logo-mark.svg` | Emerald mark, transparent |
 | `logo-mark-mono.svg` | One colour, uses `currentColor` (inline it or set `color`; as `<img>` it renders black) |
 | `logo-wordmark.svg` / `logo-wordmark-light.svg` | Mark and name, for dark / light backgrounds |
-| `hero.svg`, `hero.png`, `hero@2x.png` | README banner, 1600 x 560 |
+| `hero.jpg` | README banner, 1720 x 608 |
 | `social-card.svg`, `social-card.png` | GitHub social preview, 1280 x 640 |
 | `favicon.svg`, `favicon-32.png`, `favicon-16.png` | Simplified mark for small sizes |
 | `logo-mark-512.png`, `logo-mark-256.png` | Raster marks |
 | `preview.html` | Review page |
 
-PNGs were rendered with `@resvg/resvg-js-cli`. The hero tagline and the social card text use the system font stack `ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif`, so they vary slightly by platform; `social-card.png` is the fixed rendering.
+PNGs were rendered with `@resvg/resvg-js-cli`. The social card text uses the system font stack `ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif`, so it varies slightly by platform; `social-card.png` is the fixed rendering.
 
 ## Alt text
 
 - Mark: "nightgem logo, a green emerald-cut gem"
 - Wordmark: "nightgem"
-- Hero: "A night-shift factory: a foreman places rough stones on a conveyor that splits into three lanes, where workers turn them into cut gems, checked by an inspector with a loupe"
+- Hero: "nightgem, spec at dusk, gems at dawn: a night-shift gem factory. A foreman robot takes rough stones from a crate and sends them along conveyor lanes to cutting, grinding and polishing, through a central machine with robotic arms, to an inspector robot who checks a finished emerald under a loupe, next to screens showing a verified branch and a project report."
 - Social card: "nightgem: write the spec, sleep, wake up to reviewed branches"
