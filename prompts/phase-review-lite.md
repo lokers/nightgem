@@ -16,5 +16,8 @@ No human is present. Do not ask questions. Decide and log.
    `{{eventsDir}}/run-complete.json` (summary in plain words, `finalReviewPath` = `{{specsDir}}/FINAL_REVIEW.md`).
    That is your last action. Do it even if the oracle did not answer: say so in `FINAL_REVIEW.md`.
 
+On a resumed run, files named `run-complete-attempt<n>.json` and `FINAL_REVIEW-attempt<n>.md` are the markers of an earlier
+attempt. Ignore them and write fresh `FINAL_REVIEW.md` and `run-complete.json` files.
+
 Append log lines with a quoted-delimiter heredoc (`cat >> {{tasksJsonl}} <<'EOF'`) or the write tool, never `echo "..."`.
 Never use `git stash` or network git. Never push, open PRs, merge to a default branch, or touch the issue tracker.

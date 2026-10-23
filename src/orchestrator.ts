@@ -38,11 +38,18 @@
  * closes the open attempt on every end path in the same write that sets the final state: `endedAt`, `state`,
  * `stopReason` and `costUsd` (the attempt spend, multiplied, not cumulative). `RUN.json.costUsd` stays the cumulative run cost.
  *
+ * Resume: the attempt records how many `tasks.jsonl` events exist when it starts (the offset). It skips the phases that an
+ * earlier attempt finished (a `phase:<name>` done event before the offset; for the review also a valid `run-complete.json`
+ * and `FINAL_REVIEW.md` that did not come from a review-lite), runs every later phase, and always ends with the report. Phase
+ * checks of the attempt read only the events after the offset. When the review runs again, the earlier `run-complete.json`
+ * and `FINAL_REVIEW.md` are renamed with an `-attempt<n>` suffix first; when it is skipped they stay for the report.
+ * Skipped phases count as completed, so a resumed run can still end `completed`.
+ *
  * Exit code: 0 for `completed`, 1 otherwise (`FinalState.exitCode`). A restart on a terminal run is a no-op (exit 0).
  * Violations in OTHER workspace repos never stop the run: they become `tripwire-other-repo` defects and are re-baselined.
  */
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname, extname, basename, join } from 'node:path';
 
 import type { BudgetLedger } from './budget.ts';
 import { isRunApiError } from './client.ts';
@@ -50,6 +57,7 @@ import {
   attemptsOf,
   isTerminalRunState,
   parseModelRef,
+  RunComplete,
   TaskEvent,
   type ControlFlags,
   type Defect,
@@ -92,6 +100,14 @@ export const REVIEW_LITE_PROMPT = 'phase-review-lite';
 export type SoftReason = 'budget-soft' | 'wallclock-soft';
 export const FINAL_REVIEW_FILE = 'FINAL_REVIEW.md';
 export const RUN_COMPLETE_FILE = 'run-complete.json';
+/**
+ * Written by the orchestrator, in the control dir (agent-unwritable), when a review-lite starts. The lite review writes the
+ * same `phase:review` event, `run-complete.json` and `FINAL_REVIEW.md` as the full review, so this is what tells a resume
+ * that the review in those files was only the short wind-down one.
+ */
+/** `blockedReason` prefix the wind-down puts on the tasks it parks; a resumed build re-opens them. */
+export const WIND_DOWN_TAG = 'wind-down:';
+export const REVIEW_LITE_MARKER_FILE = 'review-lite.json';
 export const APPEND_AGENTS = ['orchestrator', 'fixer', 'designer', 'oracle'] as const;
 /** Agents that must be registered before the preflight (slim registers them 2-15 s after start). */
 export const REQUIRED_AGENTS = ['orchestrator', 'fixer', 'oracle'] as const;
@@ -134,6 +150,8 @@ export interface StateOps {
   readControlFlags(controlDir: string): ControlFlags;
   touchHeartbeat(controlDir: string, nowMs: number): ControlFlags;
   readTasks(path: string): TaskEvent[];
+  /** Like `readTasks`, plus the number of lines that could not be parsed (a torn last line after a crash). */
+  readTasksChecked(path: string): { items: TaskEvent[]; malformed: number };
   exists(path: string): boolean;
 }
 
@@ -146,6 +164,7 @@ export const realStateOps: StateOps = {
   readControlFlags,
   touchHeartbeat,
   readTasks: (path) => readJsonl(path, TaskEvent).items,
+  readTasksChecked: (path) => readJsonl(path, TaskEvent),
   exists: (path) => existsSync(path),
 };
 
@@ -334,6 +353,13 @@ class Run {
   /** The current phase is the review-lite of the soft path. */
   private lite = false;
   private readonly completedPhases = new Set<Phase>();
+  /**
+   * Resume (AD8). `taskOffset` is how many `tasks.jsonl` events existed when this attempt started; phase checks of this
+   * attempt read only the events after it. Phases before `startIdx` (an index into PHASE_ORDER) were finished by an earlier
+   * attempt and are skipped. A fresh run has offset 0 and startIdx 0.
+   */
+  private taskOffset = 0;
+  private startIdx = 0;
   private windDownStartedAt = 0;
   private readonly mutedRepos = new Set<string>();
   private quietSince: number | undefined;
@@ -536,6 +562,7 @@ class Run {
       this.final = { state: 'failed', stopReason: 'attempt-invariant' };
       return;
     }
+    if (!this.planResume(manifest)) return;
     // children of earlier attempts' roots keep their phase
     for (const r of manifest.rootSessions) this.phaseBySession.set(r.sessionId, r.phase);
     const startedAt = manifest.startedAt ?? this.iso();
@@ -560,8 +587,14 @@ class Run {
     const model = (this.manifestState ?? manifest).model;
     parseModelRef(model); // fail early on a malformed model
 
-    for (const phase of PHASE_ORDER) {
+    for (const [i, phase] of PHASE_ORDER.entries()) {
       if (this.stopReq) break;
+      if (i < this.startIdx) {
+        // finished by an earlier attempt: counts for the final state, but nothing runs
+        this.log('phase.skipped', { phase, reason: 'done-in-earlier-attempt' });
+        this.completedPhases.add(phase);
+        continue;
+      }
       if (this.skipToReport && phase !== 'report') {
         this.log('phase.skipped', { phase, reason: 'wind-down' });
         continue;
@@ -577,6 +610,106 @@ class Run {
       return;
     }
     this.final = this.normalFinal();
+  }
+
+  /**
+   * Resume (AD8). Called once, after the start-up assertions pass and before anything starts. Records the `tasks.jsonl`
+   * offset, finds the first unfinished phase and, when the review is going to run again, moves the previous attempt's review
+   * markers aside so they cannot short-circuit it. Returns false when the run must end (final state decided).
+   *
+   * A phase counts as done only if a `phase:<name>` done event exists before the offset. The review also needs a valid
+   * `run-complete.json` and a `FINAL_REVIEW.md` that are not from a review-lite (no lite marker, and the attempt before
+   * did not end in a soft wind-down). The report never counts: it always runs, so a run always ends with a fresh report.
+   */
+  private planResume(manifest: RunManifest): boolean {
+    let read: { items: TaskEvent[]; malformed: number };
+    try {
+      read = this.st.readTasksChecked(this.d.paths.tasksJsonl);
+    } catch (err) {
+      // not knowing what is done would mean planning again on top of finished work: do not guess
+      this.addDefect('tasks-unreadable', `tasks.jsonl cannot be read: ${errMsg(err)}`);
+      this.final = { state: 'failed', stopReason: 'tasks-unreadable' };
+      return false;
+    }
+    if (read.malformed > 0) {
+      this.log('tasks.malformed', { lines: read.malformed, warning: 'unparseable tasks.jsonl lines are ignored' });
+    }
+    this.terminateTasksLine();
+    this.taskOffset = read.items.length;
+
+    const attempts = attemptsOf(manifest);
+    const prev = attempts.length > 1 ? attempts.at(-2) : undefined;
+    const done = (phase: Phase): boolean => {
+      if (phase === 'report') return false;
+      if (!read.items.some((t) => t.id === `phase:${phase}` && t.state === 'done')) return false;
+      return phase !== 'review' || this.fullReviewMarkersPresent(prev);
+    };
+    const first = PHASE_ORDER.findIndex((p) => !done(p));
+    this.startIdx = first < 0 ? PHASE_ORDER.length - 1 : first;
+    this.log('resume.plan', { offset: this.taskOffset, startPhase: PHASE_ORDER[this.startIdx], skipped: PHASE_ORDER.slice(0, this.startIdx) });
+    if (this.startIdx > PHASE_ORDER.indexOf('review')) return true; // the review is genuinely done: its files stay for the report
+    const n = prev?.n ?? attempts.at(-1)?.n ?? 1;
+    try {
+      this.archiveMarkers(n);
+    } catch (err) {
+      this.addDefect('marker-rename-failed', `cannot move the earlier review markers aside: ${errMsg(err)}`);
+      this.final = { state: 'failed', stopReason: 'marker-rename-failed' };
+      return false;
+    }
+    return true;
+  }
+
+  /** `run-complete.json` holds a valid RunComplete, `FINAL_REVIEW.md` exists, and neither comes from a review-lite. */
+  private fullReviewMarkersPresent(prev: { stopReason?: string } | undefined): boolean {
+    if (!this.finalReviewExists() || !this.validRunComplete()) return false;
+    if (this.st.exists(join(this.d.paths.controlDir, REVIEW_LITE_MARKER_FILE))) return false;
+    // a v1 run, or one whose attempt wound down: the review in the files can only be the lite one
+    return prev?.stopReason !== 'budget-soft' && prev?.stopReason !== 'wallclock-soft';
+  }
+
+  private validRunComplete(): boolean {
+    let raw: string;
+    try {
+      raw = readFileSync(join(this.d.paths.runDir, RUN_COMPLETE_FILE), 'utf8');
+    } catch {
+      return false;
+    }
+    const lines = [raw, ...raw.split('\n')].filter((l) => l.trim() !== '');
+    return lines.some((l) => {
+      try {
+        return RunComplete.safeParse(JSON.parse(l)).success;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  /** Rename the review markers of the earlier attempt `n` to `<name>-attempt<n><ext>` (never overwriting a file). */
+  private archiveMarkers(n: number): void {
+    const files = [
+      join(this.d.paths.runDir, RUN_COMPLETE_FILE),
+      join(this.d.paths.specsDir, FINAL_REVIEW_FILE),
+      join(this.d.paths.controlDir, REVIEW_LITE_MARKER_FILE),
+    ];
+    for (const file of files) {
+      if (!this.st.exists(file)) continue;
+      const ext = extname(file);
+      const stem = join(dirname(file), basename(file, ext));
+      let target = `${stem}-attempt${n}${ext}`;
+      for (let k = 1; this.st.exists(target); k++) target = `${stem}-attempt${n}-${k}${ext}`;
+      renameSync(file, target);
+      this.log('marker.renamed', { from: file, to: target });
+    }
+  }
+
+  /** A torn last line (no newline) would swallow the next appended event: end it. */
+  private terminateTasksLine(): void {
+    try {
+      const raw = readFileSync(this.d.paths.tasksJsonl, 'utf8');
+      if (raw.length > 0 && !raw.endsWith('\n')) appendFileSync(this.d.paths.tasksJsonl, '\n');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') this.log('tasks.repair_failed', { error: errMsg(err) });
+    }
   }
 
   /**
@@ -865,6 +998,7 @@ class Run {
       if (!m.knownSessionIds.includes(session.id)) m.knownSessionIds.push(session.id);
     });
     this.log('phase.start', { phase, rootId: session.id, lite });
+    if (lite) this.markReviewLite();
 
     const text = this.d.renderPrompt(lite ? REVIEW_LITE_PROMPT : `phase-${phase}`, this.promptVars());
     await this.retrying('prompt', () => api.prompt(session.id, { text }));
@@ -904,6 +1038,16 @@ class Run {
     }
   }
 
+  /** Record that this attempt's review is the short wind-down one (see {@link REVIEW_LITE_MARKER_FILE}). */
+  private markReviewLite(): void {
+    try {
+      const n = attemptsOf(this.manifestState ?? this.st.readManifest(this.mpath)).at(-1)?.n ?? 1;
+      writeFileSync(join(this.d.paths.controlDir, REVIEW_LITE_MARKER_FILE), `${JSON.stringify({ attempt: n, ts: this.iso() })}\n`, { mode: 0o600 });
+    } catch (err) {
+      this.addDefect('review-lite-marker-failed', `cannot record the review-lite marker: ${errMsg(err)}`);
+    }
+  }
+
   private tasks(): TaskEvent[] {
     try {
       return this.st.readTasks(this.d.paths.tasksJsonl);
@@ -919,17 +1063,20 @@ class Run {
     return this.st.exists(join(this.d.paths.specsDir, FINAL_REVIEW_FILE));
   }
 
+  /** Only events written by this attempt count (the earlier ones are ignored, see {@link planResume}). */
   private phaseDone(phase: Phase): boolean {
-    if (this.tasks().some((t) => t.id === `phase:${phase}` && t.state === 'done')) return true;
+    if (this.tasks().slice(this.taskOffset).some((t) => t.id === `phase:${phase}` && t.state === 'done')) return true;
     return phase === 'review' && this.runCompleteSeen() && this.finalReviewExists();
   }
 
   private nextTask(): string {
-    const latest = new Map<string, TaskEvent>();
-    for (const t of this.tasks()) latest.set(t.id, t);
-    for (const t of latest.values()) {
+    const latest = new Map<string, { t: TaskEvent; idx: number }>();
+    this.tasks().forEach((t, idx) => latest.set(t.id, { t, idx }));
+    for (const { t, idx } of latest.values()) {
       if (/^(phase|integration|wind-down):/.test(t.id)) continue;
-      if (['todo', 'running', 'verifying', 'fixing'].includes(t.state)) return t.id;
+      // AD9: a task the wind-down of an earlier attempt parked is open work again (same rule as prompts/phase-build.md)
+      const parked = idx < this.taskOffset && ['blocked', 'skipped'].includes(t.state) && t.blockedReason?.startsWith(WIND_DOWN_TAG) === true;
+      if (parked || ['todo', 'running', 'verifying', 'fixing'].includes(t.state)) return t.id;
     }
     return 'the remaining work of this phase (check the board)';
   }

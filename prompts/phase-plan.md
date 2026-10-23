@@ -22,6 +22,8 @@ No human is present. Do not ask questions. Decide and log.
    Log other choices (resolved spec gaps, base-branch notes, risky changes) as Decisions too.
 6. Write the task board to `{{statusMd}}` with every task `todo`, and append a `todo` TaskEvent per task to `{{tasksJsonl}}`
    (`phase: "plan"`, `attempt: 0`, the planned branch and worktree path).
-7. Append the phase-done TaskEvent for `phase:plan`, then stop. Do not create worktrees or dispatch implementation.
+7. On a resumed run, `{{planMd}}` and some TaskEvents may already exist from an interrupted plan phase: read them and finish the
+   plan instead of starting over, and do not append duplicate `todo` events for tasks that are already logged.
+   Append the phase-done TaskEvent for `phase:plan`, then stop. Do not create worktrees or dispatch implementation.
 
 Formats, the workspace instructions and the never-list are in your system instructions.

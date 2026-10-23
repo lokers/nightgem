@@ -6,8 +6,10 @@ WIND-DOWN for run `{{slug}}` ({{reason}}; spent ${{costUsd}} of ${{budgetUsd}}).
    - If verification **passes**, commit it with a `wip:` subject prefix (`wip: <what>`, keep the repo's commit-format rules,
      including any in the workspace instructions).
    - If it **fails**, leave it uncommitted and record that in the task's `blockedReason`.
-4. Append a TaskEvent for every unfinished task to `{{tasksJsonl}}` (`blocked` with `blockedReason: "wind-down: ..."` for
-   started tasks, `skipped` for tasks never started), and update `{{statusMd}}`. Log a Decision of kind `other` with
+4. Append a TaskEvent for every unfinished task to `{{tasksJsonl}}` (`blocked` for started tasks, `skipped` for tasks never
+   started), and update `{{statusMd}}`. **Tag every task you park**: its `blockedReason` (the reason field, for `skipped` tasks
+   too) must start with `wind-down:`, for example `"wind-down: unfinished at soft stop"`. A later resume re-opens exactly the
+   tasks with that tag, so do not use the prefix for tasks that are blocked for another reason. Log a Decision of kind `other` with
    `needsHumanAttention: true` that says the run was wound down and why.
 5. Write the `## Narrative` section of `{{reportMd}}` (only that section; the code writes the rest): what is done, what is
    unfinished, and what the human should look at first.

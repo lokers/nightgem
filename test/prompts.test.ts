@@ -431,6 +431,42 @@ describe('phase prompts', () => {
     expect(out).toMatch(/reviewable state/);
     expect(out).toContain('git stash');
   });
+
+  it('wind-down tells the orchestrator to tag every parked task with the wind-down: prefix', () => {
+    const out = render('wind-down');
+    expect(out).toMatch(/Tag every task you park/);
+    expect(out).toContain('`blockedReason`');
+    expect(out).toMatch(/must start with `wind-down:`/);
+    expect(out).toMatch(/skipped. tasks\s+too/);
+  });
+});
+
+describe('resume notes (AD8, AD9)', () => {
+  it('phase-build re-opens the wind-down-parked tasks, keeps other blocked tasks and reuses worktrees', () => {
+    const out = render('phase-build');
+    expect(out).toContain('On a resumed run');
+    expect(out).toMatch(/use the existing/);
+    expect(out).toMatch(/do not re-plan/);
+    expect(out).toMatch(/`todo` and `running` tasks, and the tasks the wind-down/);
+    expect(out).toMatch(/starting with `wind-down:`/);
+    expect(out).toMatch(/Treat them as `todo`/);
+    expect(out).toMatch(/Tasks `blocked` or `skipped` for any other reason stay as they are/);
+    expect(out).toMatch(/Never recreate, reset or delete an existing\s+worktree or branch/);
+    expect(out).toMatch(/Never redo a `done` task/);
+    expect(out).toMatch(/never redo finished work/);
+  });
+
+  it('the review prompts say to ignore the renamed markers of earlier attempts', () => {
+    for (const name of ['phase-review', 'phase-review-lite'] as const) {
+      const out = render(name);
+      expect(out, name).toContain('run-complete-attempt<n>.json');
+      expect(out, name).toContain('FINAL_REVIEW-attempt<n>.md');
+    }
+  });
+
+  it('phase-plan finishes an interrupted plan instead of starting over', () => {
+    expect(render('phase-plan')).toMatch(/On a resumed run/);
+  });
 });
 
 describe('JSON example lines parse with the contracts', () => {
