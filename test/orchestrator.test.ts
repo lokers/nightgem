@@ -25,7 +25,7 @@ import {
 } from '../src/orchestrator.ts';
 import { runPaths, type RunPaths } from '../src/paths.ts';
 import { renderPrompt } from '../src/prompts.ts';
-import { readControlFlags, readManifest, writeManifest } from '../src/state.ts';
+import { readControlFlags, readManifest, writeControlFlags, writeManifest } from '../src/state.ts';
 import type { Violation } from '../src/tripwires.ts';
 import { createWatchdog, type WatchdogConfig } from '../src/watchdog.ts';
 import { FakeClock, FakeServer, FakeSignals, type PromptRecord } from './fakes/server.ts';
@@ -1409,5 +1409,399 @@ describe('logging', () => {
     const events = h.logs.map((l) => l.event);
     for (const e of ['state', 'protected', 'preflight.ok', 'phase.start', 'phase.end', 'final']) expect(events).toContain(e);
     for (const l of h.logs) expect(typeof l.fields.ts).toBe('string');
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Attempt lifecycle (T9a)
+// ---------------------------------------------------------------------------------------------------------------
+
+const lastAttempt = (h: Harness) => h.manifest().attempts!.at(-1)!;
+
+describe('attempt lifecycle: a fresh launch', () => {
+  it('writes attempts[0] at start (open, with the budget and a zero cost at start) and closes it when the run completes', async () => {
+    let atPlan: RunManifest | undefined;
+    const h = makeHarness({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-plan') atPlan = hh.manifest();
+        autoPhases(rec, srv);
+      },
+    });
+    expect(h.manifest().attempts).toBeUndefined();
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(atPlan?.attempts).toEqual([{ n: 1, startedAt: atPlan!.startedAt, budgetUsd: 10, costAtStartUsd: 0 }]);
+    const m = h.manifest();
+    expect(m.attempts).toHaveLength(1);
+    expect(m.attempts![0]).toEqual({
+      n: 1,
+      startedAt: m.startedAt,
+      endedAt: m.endedAt,
+      state: 'completed',
+      budgetUsd: 10,
+      costAtStartUsd: 0,
+      costUsd: 2, // four phases at $0.5
+    });
+    expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).toMatchObject({
+      attempt: 1,
+      budgetUsd: 10,
+      costAtStartUsd: 0,
+      baselineUsd: 0,
+      attemptSpendUsd: 0,
+      cumulativeUsd: 0,
+    });
+  });
+});
+
+describe('attempt lifecycle: every end path closes the open attempt', () => {
+  const closedWith = (h: Harness, state: RunState, stopReason: string | undefined, costUsd: number): void => {
+    const m = h.manifest();
+    expect(m.attempts).toHaveLength(1);
+    const a = m.attempts![0]!;
+    expect(a).toMatchObject({ n: 1, state, endedAt: m.endedAt, budgetUsd: 10, costAtStartUsd: 0 });
+    expect(a.stopReason).toBe(stopReason);
+    expect(a.costUsd).toBeCloseTo(costUsd, 8);
+    expect(m.state).toBe(state);
+    expect(m.costUsd).toBeCloseTo(costUsd, 8);
+  };
+
+  it('soft wind-down (budget): aborted-budget / budget-soft', async () => {
+    const h = makeHarness({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 8.5), 20_000);
+        } else if (rec.kind === 'wind-down') hh.clock.setTimeout(() => srv.setBusy(rec.sessionId, false), 5_000);
+        else autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'aborted-budget', stopReason: 'budget-soft' });
+    closedWith(h, 'aborted-budget', 'budget-soft', 9.7); // plan .5 + build 8.5 + review-lite .2 + report .5
+  });
+
+  it('soft wind-down (wall clock): failed / wallclock-soft', async () => {
+    const h = makeHarness({
+      watchdog: { wallclockMs: 60 * 60_000, hungMs: 10 * 3_600_000 },
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') srv.setBusy(rec.sessionId, true);
+        else if (rec.kind === 'wind-down') hh.clock.setTimeout(() => srv.setBusy(rec.sessionId, false), 5_000);
+        else autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'wallclock-soft' });
+    closedWith(h, 'failed', 'wallclock-soft', 1.2);
+  });
+
+  it('hard budget stop: aborted-budget / budget-hard', async () => {
+    const h = makeHarness({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 11), 40_000);
+          return;
+        }
+        autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'aborted-budget', stopReason: 'budget-hard' });
+    closedWith(h, 'aborted-budget', 'budget-hard', 11.5);
+  });
+
+  it('tripwire violation: failed / tripwire:<kind>', async () => {
+    const h = makeHarness({
+      repos: [{ name: 'acme-api', path: '/Users/alice/work/acme-api', defaultBranch: 'main', baseline: { head: 'h1', branch: 'main', porcelainHash: 'p1', stashCount: 0 } }],
+      script: (rec, srv) => {
+        if (rec.kind === 'phase-plan') srv.setBusy(rec.sessionId, true);
+        else autoPhases(rec, srv);
+      },
+    });
+    h.violationsQueue.push([{ kind: 'head', path: '/Users/alice/work/acme-api', message: 'HEAD moved' }]);
+    const res = await h.run();
+    expect(res.state).toBe('failed');
+    expect(res.stopReason).toBe('tripwire:head');
+    const a = lastAttempt(h);
+    expect(a).toMatchObject({ n: 1, state: 'failed', stopReason: res.stopReason, endedAt: h.manifest().endedAt });
+  });
+
+  it('user stop (SIGTERM): stopped / signal:SIGTERM', async () => {
+    const h = makeHarness({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => hh.signals.emit('SIGTERM'), 60_000);
+          return;
+        }
+        autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'stopped', stopReason: 'signal:SIGTERM' });
+    closedWith(h, 'stopped', 'signal:SIGTERM', 0.5);
+  });
+
+  it('failure (an exception in a phase): failed / exception', async () => {
+    const h = makeHarness();
+    h.server.createError = new Error('boom');
+    h.server.failCreateAt = new Set([2]);
+    const res = await h.run();
+    expect(res.state).toBe('failed');
+    closedWith(h, 'failed', 'exception: boom', 0.5);
+  });
+
+  it('the server dying: failed / server-exited', async () => {
+    const h = makeHarness({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => srv.crash(), 20_000);
+          return;
+        }
+        autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'server-exited' });
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'failed', stopReason: 'server-exited' });
+  });
+
+  it('an early failure (preflight) closes the attempt too, with a zero spend', async () => {
+    const h = makeHarness({ preflight: async () => ({ ok: false, failures: ['no'] }) });
+    const res = await h.run();
+    expect(res.stopReason).toBe('preflight-failed');
+    expect(lastAttempt(h)).toMatchObject({ n: 1, state: 'failed', stopReason: 'preflight-failed', costUsd: 0 });
+  });
+
+  it('a v1 manifest (no attempts, schema v1 on disk) gets its implicit attempt written at start and closed at the end', async () => {
+    const h = makeHarness();
+    const { workspaceRoot: _ws, attempts: _a, ...v1 } = h.manifest();
+    writeFileSync(h.paths.runJson, `${JSON.stringify({ ...v1, schemaVersion: 1 })}\n`);
+    expect(JSON.parse(readFileSync(h.paths.runJson, 'utf8')).attempts).toBeUndefined();
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    const m = h.manifest();
+    expect(m.attempts).toEqual([{ n: 1, startedAt: m.startedAt, endedAt: m.endedAt, state: 'completed', budgetUsd: 10, costAtStartUsd: 0, costUsd: 2 }]);
+  });
+
+  it('if the start write never landed, finalize builds the implicit attempt from the top-level fields and closes it', async () => {
+    const h = makeHarness();
+    let first = true;
+    h.deps.state = {
+      ...h.deps.state,
+      updateManifest: (p, fn) =>
+        realStateOps.updateManifest(p, (m) => {
+          fn(m);
+          if (first) {
+            first = false;
+            delete m.attempts; // simulate an older writer that drops the field
+          }
+        }),
+    };
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    const m = h.manifest();
+    expect(m.attempts).toEqual([{ n: 1, startedAt: m.startedAt, endedAt: m.endedAt, state: 'completed', budgetUsd: 10, costAtStartUsd: 0, costUsd: 2 }]);
+  });
+});
+
+describe('attempt lifecycle: start-up assertions', () => {
+  const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T01:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 } as const;
+  const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
+  const withAttempts = (h: Harness, attempts: unknown[], extra: Record<string, unknown> = {}): void => {
+    writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), startedAt: '2026-01-01T00:00:00.000Z', costUsd: 4, attempts, ...extra }));
+  };
+  const failedLoudly = async (h: Harness): Promise<void> => {
+    const before = h.manifest().attempts ?? [];
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'attempt-invariant', exitCode: 1, noop: false });
+    expect(h.startInputs).toHaveLength(0); // no server was started
+    expect(h.server.prompts).toHaveLength(0);
+    const m = h.manifest();
+    expect(m.state).toBe('failed');
+    expect(m.defects.map((d) => d.kind)).toEqual(['attempt-invariant']);
+    expect(h.logs.some((l) => l.event === 'attempt.invariant_failed')).toBe(true);
+    expect(h.reportStates).toEqual(['failed']);
+    expect(h.cleanupCalls).toBe(1);
+    expect(existsSync(h.lockPath)).toBe(false);
+    expect(m.attempts!.slice(0, Math.max(0, before.length - 1))).toEqual(before.slice(0, -1)); // earlier attempts untouched
+  };
+
+  it('a last attempt that is already closed fails the start and is not rewritten', async () => {
+    const h = makeHarness();
+    withAttempts(h, [OLD]);
+    await failedLoudly(h);
+    expect(h.manifest().attempts).toEqual([OLD]);
+    expect(h.manifest().defects[0]!.message).toContain('already closed');
+  });
+
+  it('an attempt budget that differs from RUN.json budgetUsd fails the start (the attempt is closed as failed)', async () => {
+    const h = makeHarness();
+    withAttempts(h, [OLD, { ...OPEN, budgetUsd: 7 }]);
+    await failedLoudly(h);
+    expect(h.manifest().defects[0]!.message).toContain('does not match');
+    expect(lastAttempt(h)).toMatchObject({ n: 2, state: 'failed', stopReason: 'attempt-invariant' });
+  });
+
+  it('a ledger built for another budget fails the start', async () => {
+    const h = makeHarness();
+    h.deps.ledger = new BudgetLedger({ budgetUsd: 5, softPct: 0.85, hardPct: 1, costMultiplier: 1 });
+    await failedLoudly(h);
+    expect(h.manifest().defects[0]!.message).toContain('ledger budget');
+  });
+
+  it.each(['hardStop', 'softStop'] as const)('a leftover %s flag in control.json fails the start and is left as found', async (flag) => {
+    const h = makeHarness();
+    withAttempts(h, [OLD, OPEN]);
+    writeControlFlags(h.paths.controlDir, { [flag]: true });
+    await failedLoudly(h);
+    expect(h.manifest().defects[0]!.message).toContain(flag);
+    expect(readControlFlags(h.paths.controlDir)[flag]).toBe(true);
+    expect(lastAttempt(h)).toMatchObject({ n: 2, state: 'failed', stopReason: 'attempt-invariant' });
+  });
+
+  it('an open attempt with a matching budget and clear flags starts normally', async () => {
+    const h = makeHarness();
+    withAttempts(h, [OLD, OPEN]);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+  });
+});
+
+describe('attempt lifecycle: attempt 2', () => {
+  const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T01:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 } as const;
+  const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
+
+  /** A resumed run: attempt 1 spent $4 in one (old) plan root, recorded in cost.jsonl; attempt 2 has a $10 budget. */
+  function resumed(o: Opts = {}): { h: Harness; oldRoot: string } {
+    const h = makeHarness(o);
+    const oldRoot = h.server.seedSession(4);
+    const line = { ts: '2026-01-01T00:30:00.000Z', sessionId: oldRoot, parentId: null, phase: 'plan', costUsd: 4, estimated: false, source: 'session-info', totalUsd: 4 };
+    mkdirSync(dirname(h.paths.costJsonl), { recursive: true });
+    writeFileSync(h.paths.costJsonl, `${JSON.stringify(line)}\n`);
+    writeManifest(
+      h.paths.runJson,
+      RunManifest.parse({
+        ...h.manifest(),
+        startedAt: OLD.startedAt,
+        costUsd: 4,
+        rootSessions: [{ phase: 'plan', sessionId: oldRoot, costUsd: 4 }],
+        knownSessionIds: [oldRoot],
+        attempts: [OLD, OPEN],
+      }),
+    );
+    h.deps.ledger = new BudgetLedger({
+      budgetUsd: 10,
+      softPct: 0.85,
+      hardPct: 1,
+      costMultiplier: 1,
+      now: () => new Date(h.clock.now()),
+      costLines: [CostLineOf(line)],
+      costAtStartUsd: 4,
+    });
+    return { h, oldRoot };
+  }
+  const CostLineOf = (l: Record<string, unknown>) => ({ ...l }) as never;
+
+  it('logs baselineUsd, costAtStartUsd and attemptSpendUsd at startup', async () => {
+    const { h } = resumed();
+    await h.run();
+    expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).toMatchObject({
+      attempt: 2,
+      budgetUsd: 10,
+      costAtStartUsd: 4,
+      baselineUsd: 4,
+      attemptSpendUsd: 0,
+      cumulativeUsd: 0, // nothing ingested yet: the ledger fills at the first reconcile
+      priorCostUsd: 4,
+    });
+  });
+
+  it('recordLedger keeps RUN.json costUsd cumulative and writes the open attempt\'s live costUsd (the spend of this attempt)', async () => {
+    let live: RunManifest | undefined;
+    const { h } = resumed({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 3), 20_000);
+          hh.clock.setTimeout(() => (live = hh.manifest()), 100_000);
+          hh.clock.setTimeout(() => {
+            srv.markPhaseDone('build');
+            srv.setBusy(rec.sessionId, false);
+          }, 110_000);
+          return;
+        }
+        autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(live!.costUsd).toBeCloseTo(7.5, 8); // 4 (attempt 1) + 0.5 plan + 3 build
+    expect(live!.attempts![1]!.costUsd).toBeCloseTo(3.5, 8);
+    expect(live!.attempts![1]!.endedAt).toBeUndefined();
+    expect(live!.attempts![0]).toEqual(OLD);
+    const m = h.manifest();
+    expect(m.costUsd).toBeCloseTo(8.5, 8); // 4 + plan .5 + build 3 + review .5 + report .5
+    expect(m.attempts![1]!.costUsd).toBeCloseTo(4.5, 8);
+  });
+
+  it('the wind-down prompt shows the ATTEMPT spend and the attempt budget; the soft log carries both figures', async () => {
+    const { h } = resumed({
+      script: (rec, srv, hh) => {
+        if (rec.kind === 'phase-build') {
+          srv.setBusy(rec.sessionId, true);
+          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 8.5), 20_000);
+        } else if (rec.kind === 'wind-down') hh.clock.setTimeout(() => srv.setBusy(rec.sessionId, false), 5_000);
+        else autoPhases(rec, srv);
+      },
+    });
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'aborted-budget', stopReason: 'budget-soft' });
+    const wd = h.server.prompts.find((p) => p.kind === 'wind-down')!;
+    expect(wd.text).toContain('spent $9.00 of $10.00'); // 0.5 + 8.5 this attempt, not the $13.00 cumulative
+    expect(wd.text).not.toContain('$13.00');
+    expect(h.logs.find((l) => l.event === 'budget.soft')?.fields).toMatchObject({ attemptSpendUsd: 9, cumulativeUsd: 13, budgetUsd: 10 });
+
+    const m = h.manifest();
+    expect(m.attempts![0]).toEqual(OLD);
+    expect(m.attempts![1]).toMatchObject({ n: 2, state: 'aborted-budget', stopReason: 'budget-soft', endedAt: m.endedAt, budgetUsd: 10, costAtStartUsd: 4 });
+    expect(m.attempts![1]!.costUsd).toBeCloseTo(9.7, 8);
+    expect(m.costUsd).toBeCloseTo(13.7, 8); // cumulative, the next resume's costAtStartUsd
+  });
+
+  it('rootSessions[].costUsd is the cumulative cost of the root\'s PHASE across attempts (every root of a phase shows it), not a per-attempt figure', async () => {
+    const { h, oldRoot } = resumed();
+    await h.run();
+    const m = h.manifest();
+    const plans = m.rootSessions.filter((r) => r.phase === 'plan');
+    expect(plans.map((r) => r.sessionId)[0]).toBe(oldRoot);
+    expect(plans).toHaveLength(2);
+    for (const r of plans) expect(r.costUsd).toBeCloseTo(4.5, 8); // 4 (attempt 1) + 0.5 (attempt 2)
+    expect(m.rootSessions.find((r) => r.phase === 'build')!.costUsd).toBeCloseTo(0.5, 8);
+    expect(m.attempts![1]!.costUsd).toBeCloseTo(2, 8);
+  });
+
+  it('seeds phaseBySession from rootSessions: a child of an old build root keeps the build phase in cost.jsonl', async () => {
+    const h = makeHarness();
+    const oldRoot = h.server.seedSession(1);
+    const oldChild = h.server.spawnChild(oldRoot, 'fixer', false);
+    const line = { ts: '2026-01-01T00:30:00.000Z', sessionId: oldRoot, parentId: null, phase: 'build', costUsd: 1, estimated: false, source: 'session-info', totalUsd: 1 };
+    mkdirSync(dirname(h.paths.costJsonl), { recursive: true });
+    writeFileSync(h.paths.costJsonl, `${JSON.stringify(line)}\n`);
+    writeManifest(
+      h.paths.runJson,
+      RunManifest.parse({
+        ...h.manifest(),
+        startedAt: OLD.startedAt,
+        costUsd: 1,
+        rootSessions: [{ phase: 'build', sessionId: oldRoot, costUsd: 1 }],
+        attempts: [{ ...OLD, costUsd: 1 }, { ...OPEN, costAtStartUsd: 1 }],
+      }),
+    );
+    h.deps.ledger = new BudgetLedger({ budgetUsd: 10, softPct: 0.85, hardPct: 1, costMultiplier: 1, costLines: [CostLineOf(line)], costAtStartUsd: 1, now: () => new Date(h.clock.now()) });
+    await h.run();
+    const lines = readFileSync(h.paths.costJsonl, 'utf8').trim().split('\n').map((l) => JSON.parse(l) as { sessionId: string; phase: string });
+    expect(lines.filter((l) => l.sessionId === oldChild).map((l) => l.phase)).toEqual(['build']); // the current phase was plan
   });
 });
