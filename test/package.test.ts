@@ -65,6 +65,12 @@ describe('package.json', () => {
   it('has bins that exist', () => {
     for (const f of ['bin/nightgem.mjs', 'bin/nightgem-orchestrator.mjs']) expect(existsSync(join(ROOT, f))).toBe(true);
   });
+
+  it('has bins that resolve src/ and dist/ from their real path (npm link symlinks them)', () => {
+    for (const f of ['bin/nightgem.mjs', 'bin/nightgem-orchestrator.mjs']) {
+      expect(readFileSync(join(ROOT, f), 'utf8'), f).toMatch(/realpathSync\(fileURLToPath\(import\.meta\.url\)\)/);
+    }
+  });
 });
 
 describe('npm pack --dry-run', () => {

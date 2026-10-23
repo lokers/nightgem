@@ -3,11 +3,11 @@
 //
 // Module choice: a checkout (src/ present and tsx resolvable) runs src/ through tsx, registered in-process, so it never
 // runs a stale dist/. An installed package (no src/, no tsx) runs the compiled dist/. All paths are absolute and derived
-// from this file, never from the cwd. main() is called explicitly: an "is this the entry file" guard does not fire under
+// from the REAL path of this file (npm link symlinks it into a global prefix), never from the cwd. main() is called explicitly: an "is this the entry file" guard does not fire under
 // npm's symlinked bins.
 //
 // `--check` as the only argument loads the module, prints which one it is and exits 0 without running anything.
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -16,7 +16,8 @@ import { APP } from '../profile/guard/brand.mjs';
 
 const ENTRY = 'cli';
 const NAME = APP;
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+// The real path of this file: `npm link` puts a symlink in the global prefix, and src/ or dist/ live next to the real file.
+const root = join(dirname(realpathSync(fileURLToPath(import.meta.url))), '..');
 
 async function loadModule() {
   const srcFile = join(root, 'src', `${ENTRY}.ts`);
