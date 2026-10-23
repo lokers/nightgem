@@ -20,7 +20,7 @@ import { corpusSafety } from './fixtures/profile/corpus-safety.ts';
  * Rows are only ever added or removed when the behaviour they record is fixed. Do not edit a row to make a failure go away.
  */
 
-type Kind = 'by-design' | 'fixed-in-T3b' | 'known-gap' | 'found-in-T3a';
+type Kind = 'by-design' | 'fixed-in-T3b' | 'known-gap';
 
 interface Exception {
   /** The resource, with the corpus placeholders (`{{WT}}`, `{{HOME}}`, ...). */
@@ -29,6 +29,8 @@ interface Exception {
   corpus: 'allow' | 'deny';
   /** What the guard says today. */
   guard: 'allow' | 'block';
+  /** Whether the probe is a line of `profile/corpus.txt`. Asserted both ways, so a row cannot silently stop being replayed (or claim a probe the corpus lost). */
+  inCorpus: boolean;
   kind: Kind;
   reason: string;
 }
@@ -47,6 +49,7 @@ const EXCEPTIONS: Exception[] = [
     {
       corpus: 'deny',
       guard: 'allow',
+      inCorpus: true,
       kind: 'by-design',
       reason: 'never-ending dev servers are denied by the permission profile only; the guard has no rule for them (a liveness rule, not a safety boundary)',
     },
@@ -69,6 +72,7 @@ const EXCEPTIONS: Exception[] = [
     {
       corpus: 'deny',
       guard: 'allow',
+      inCorpus: true,
       kind: 'by-design',
       reason: 'watch mode never ends; only the permission profile denies it (a liveness rule, not a safety boundary of the guard)',
     },
@@ -77,6 +81,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'npm install -g foo',
     corpus: 'deny',
     guard: 'allow',
+    inCorpus: true,
     kind: 'by-design',
     reason: 'a global install is denied by the permission profile only; the guard has no rule for it, and the sandbox write boundary confines where it can write',
   },
@@ -84,13 +89,16 @@ const EXCEPTIONS: Exception[] = [
     probe: 'git config --global user.name x',
     corpus: 'deny',
     guard: 'allow',
-    kind: 'by-design',
-    reason: 'denied by the permission profile; the guard has no git config rule, and the global config lies outside the sandbox write boundary. Possible guard rule later',
+    inCorpus: true,
+    kind: 'known-gap',
+    reason:
+      'the permission profile denies this one spelling and the guard has no git config rule. Global git config can set hooks, core.fsmonitor, credential helpers and URL rewrites; variants such as `git -C . config --global`, double spaces, `--system` and `--file ~/.gitconfig` get past both the profile and the guard, and only the sandbox (HOME is not writable) stops them',
   },
   {
     probe: 'git fetch origin',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'by-design',
     reason: 'network git is refused by the guard (argv-aware), and the permission profile deliberately leaves it to the guard; the corpus pins only that the profile does not deny it',
   },
@@ -99,6 +107,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'ls docs/gh',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'CMD_WORD treats `/` as a boundary, so the directory docs/gh matches the denied command gh',
   },
@@ -106,6 +115,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'ls tools/brew',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'same: `/brew` in a path argument',
   },
@@ -113,6 +123,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'ls src/opencode',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'same: `/opencode` in a path argument',
   },
@@ -120,6 +131,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'ls infra/docker',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'same: `/docker` in a path argument',
   },
@@ -127,6 +139,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'ls infra/terraform',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'same: `/terraform` in a path argument',
   },
@@ -134,6 +147,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'cat config/ssh',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: true,
     kind: 'fixed-in-T3b',
     reason: 'same: `/ssh` in a path argument',
   },
@@ -141,6 +155,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'node cli.js --tool=docker',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: false,
     kind: 'fixed-in-T3b',
     reason: '`=` is a boundary too, so an option value that names a denied command matches',
   },
@@ -148,6 +163,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'export TMPDIR=/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode',
     corpus: 'allow',
     guard: 'block',
+    inCorpus: false,
     kind: 'fixed-in-T3b',
     reason: 'the macOS temp dir ends in `/T/opencode`, which matches the denied command opencode after `/`',
   },
@@ -156,6 +172,7 @@ const EXCEPTIONS: Exception[] = [
     probe: 'GH pr list',
     corpus: 'deny',
     guard: 'allow',
+    inCorpus: false,
     kind: 'known-gap',
     reason: 'the command match is case-sensitive, but the macOS filesystem is not: GH resolves to gh. The sandbox and the missing credentials are the backstop',
   },
@@ -163,6 +180,7 @@ const EXCEPTIONS: Exception[] = [
     probe: '/usr/bin/g? x',
     corpus: 'deny',
     guard: 'allow',
+    inCorpus: false,
     kind: 'known-gap',
     reason: 'the shell expands the glob g? to gh; the guard reads words and does not expand globs in the command position',
   },
@@ -222,8 +240,9 @@ describe('guard replay of the shell probes in profile/corpus.txt', () => {
         const command = subst(e.probe);
         // the guard still gives the recorded verdict; when a fix flips it, the row must go (never be edited to match)
         expect(guardVerdict(command), `${e.kind}: ${e.reason}`).toBe(e.guard);
-        const inCorpus = shellProbes.filter((p) => p.resource === command);
-        for (const p of inCorpus) expect(p.expect, 'the corpus verdict of an excepted probe').toBe(e.corpus);
+        const found = shellProbes.filter((p) => p.resource === command);
+        expect(found.length > 0, `inCorpus: ${e.probe}`).toBe(e.inCorpus);
+        for (const p of found) expect(p.expect, 'the corpus verdict of an excepted probe').toBe(e.corpus);
         // a row that is not a difference is stale
         expect(e.guard).not.toBe(e.corpus === 'deny' ? 'block' : 'allow');
       });

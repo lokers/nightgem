@@ -506,6 +506,28 @@ deny|shell|npx gh pr list
 deny|shell|yarn exec gh pr list
 deny|shell|pnpm exec gh pr list
 deny|shell|pnpm dlx gh pr list
+# the same separators and control flow with a path-spelled command (/usr/bin/gh): the match follows a `/`, not whitespace
+deny|shell|echo a; /usr/bin/gh pr list
+deny|shell|echo a && /usr/bin/gh pr list
+deny|shell|false || /usr/bin/gh pr list
+deny|shell|echo a | /usr/bin/gh pr list
+deny|shell|echo a & /usr/bin/gh pr list
+deny|shell|echo a\n/usr/bin/gh pr list
+deny|shell|(/usr/bin/gh pr list)
+deny|shell|(cd x; /usr/bin/gh pr list)
+deny|shell|{ echo a; /usr/bin/gh pr list; }
+# inner strings with a path-spelled command
+deny|shell|bash -c '/usr/bin/gh pr list'
+deny|shell|eval '/usr/bin/gh pr list'
+deny|shell|echo $(/usr/bin/gh pr list)
+deny|shell|echo $(echo $(/usr/bin/gh pr list))
+deny|shell|echo `/usr/bin/gh pr list`
+deny|shell|cat <(/usr/bin/gh pr list)
+deny|shell|sh <<< '/usr/bin/gh pr list'
+deny|shell|sh <<'EOF'\n/usr/bin/gh pr list\nEOF
+deny|shell|echo '/usr/bin/gh pr list' | sh
+deny|shell|source <(echo '/usr/bin/gh pr list')
+deny|shell|python3 - <<'PY'\nimport os\nos.system("/usr/bin/gh pr list")\nPY
 # ---- inputs: workspace-specific (skipped by default) ----
 # Probes that hold only with the workspace-specific inputs: SafetyInputs (a shell-pattern deny, generated-code edit denies and two skill roots)
 # and an MCP server in the user's global config (`mcpServerNames: ['atlassian']`).

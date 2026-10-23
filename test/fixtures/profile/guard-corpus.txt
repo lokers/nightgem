@@ -1134,6 +1134,8 @@ block|shell|export X=gh; $X pr list
 block|shell|X=/usr/bin/gh command $X pr list
 block|shell|declare X=gh; $X pr list
 block|shell|local X=gh; $X pr list
+# NOTE: this blocks only incidentally, through the fail-closed check on the unresolvable `${X}${Y}` command word (the .env check), not through a rule about gh.
+# A guard that resolves variables would have to keep blocking it. It is a known gap: nothing ties the assembled word to a denied command.
 block|shell|X=g; Y=h; ${X}${Y} pr list
 block|shell|make GH=/usr/bin/gh
 block|shell|make GH=gh test
@@ -1164,3 +1166,62 @@ block|shell|yarn exec gh pr list
 block|shell|pnpm exec gh pr list
 block|shell|pnpm dlx gh pr list
 block|shell|npm_config_script_shell=gh npm run x
+# the same separators and control flow with a path-spelled command (/usr/bin/gh): the match follows a `/`, not whitespace
+block|shell|echo a; /usr/bin/gh pr list
+block|shell|echo a && /usr/bin/gh pr list
+block|shell|false || /usr/bin/gh pr list
+block|shell|echo a | /usr/bin/gh pr list
+block|shell|echo a & /usr/bin/gh pr list
+block|shell|echo a\n/usr/bin/gh pr list
+block|shell|(/usr/bin/gh pr list)
+block|shell|(cd x; /usr/bin/gh pr list)
+block|shell|{ /usr/bin/gh pr list; }
+block|shell|{ echo a; /usr/bin/gh pr list; }
+block|shell|! /usr/bin/gh pr list
+block|shell|if /usr/bin/gh pr list; then echo ok; fi
+block|shell|if true; then /usr/bin/gh pr list; fi
+block|shell|if false; then echo a; else /usr/bin/gh pr list; fi
+block|shell|while /usr/bin/gh pr list; do echo a; done
+block|shell|while true; do /usr/bin/gh pr list; done
+block|shell|for i in 1 2; do /usr/bin/gh pr list; done
+block|shell|case x in x) /usr/bin/gh pr list;; esac
+block|shell|case x in x) echo a;; *) /usr/bin/gh pr list;; esac
+block|shell|true\nif true\nthen\n  /usr/bin/gh pr list\nfi
+block|shell|if false\nthen\n  echo a\nelse\n  /usr/bin/gh pr list\nfi
+block|shell|for i in 1\ndo\n  /usr/bin/gh pr list\ndone
+block|shell|case $x in\n  a) /usr/bin/gh pr list ;;\nesac
+# wrappers with a path-spelled command
+block|shell|time -p /usr/bin/gh pr list
+block|shell|find . -name x -execdir /usr/bin/gh pr view {} \;
+block|shell|find . -name x -ok /usr/bin/gh pr view {} \;
+# inner strings with a path-spelled command
+block|shell|bash -c '/usr/bin/gh pr list'
+block|shell|eval '/usr/bin/gh pr list'
+block|shell|echo $(/usr/bin/gh pr list)
+block|shell|echo $(echo $(/usr/bin/gh pr list))
+block|shell|echo `/usr/bin/gh pr list`
+block|shell|cat <(/usr/bin/gh pr list)
+block|shell|sh <<< '/usr/bin/gh pr list'
+block|shell|sh <<'EOF'\n/usr/bin/gh pr list\nEOF
+block|shell|echo '/usr/bin/gh pr list' | sh
+block|shell|source <(echo '/usr/bin/gh pr list')
+block|shell|python3 - <<'PY'\nimport os\nos.system("/usr/bin/gh pr list")\nPY
+# exec hooks set through `=` or `-c key=value` (guard corpus only: the rendered permission profile allows them, the guard must not)
+block|shell|GIT_PAGER=/usr/bin/gh git log
+block|shell|PAGER=/usr/bin/gh git log
+block|shell|EDITOR=/usr/bin/gh git commit
+block|shell|GIT_SEQUENCE_EDITOR=/usr/bin/gh git rebase -i HEAD~2
+block|shell|GIT_EXTERNAL_DIFF=/usr/bin/gh git diff
+block|shell|git -c core.pager=/usr/bin/gh log
+block|shell|git -c core.editor=/usr/bin/gh commit
+block|shell|git -c core.fsmonitor=/usr/bin/gh status
+block|shell|git -c diff.external=/usr/bin/gh diff
+block|shell|git -c gpg.program=/usr/bin/gh commit -S -m x
+block|shell|git difftool --extcmd=/usr/bin/gh
+block|shell|tar --use-compress-program=/usr/bin/gh -cf x.tar .
+block|shell|make SHELL=/usr/bin/gh
+block|shell|SHELL=/usr/bin/gh make
+block|shell|npm run x --script-shell=/usr/bin/gh
+block|shell|git bisect run /usr/bin/gh
+# copy of the binary to a relative target (the block must not come from a /tmp write)
+block|shell|cp /opt/homebrew/bin/gh ./x
