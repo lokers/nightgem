@@ -9,7 +9,6 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { homedir, tmpdir } from 'node:os';
 import { basename, delimiter, dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
-import { execa } from 'execa';
 import { fileURLToPath } from 'node:url';
 
 import { APP, ENV_PREFIX, TMP_PREFIX } from './brand.ts';
@@ -19,6 +18,7 @@ import { isRunApiError, type RunClient } from './client.ts';
 import { parseModelRef, RepoEntry, RunContextSnapshot, type RunManifest, type SafetyInputs } from './contracts.ts';
 import { createEventPump, realClock } from './events.ts';
 import { currentBranch, defaultGit, headSha, type GitRunner } from './gitinfo.ts';
+import { runGitSafe } from './gitsafe.ts';
 import { configFromEnv } from '../profile/guard/config.mjs';
 import { decide, type GuardConfig, type GuardFlags } from '../profile/guard/decide.mjs';
 import {
@@ -1281,16 +1281,13 @@ export const PREFETCH_TIMEOUT_MS = 3 * 60_000;
 /** `git -C <repo> fetch origin --prune`, outside the sandbox, never interactive. A non-zero exit never throws. */
 export async function gitFetchOrigin(repoPath: string, timeoutMs: number, env: Env = process.env): Promise<{ exitCode: number; timedOut: boolean; stderr: string }> {
   try {
-    const r = await execa('git', ['-C', repoPath, 'fetch', 'origin', '--prune'], {
+    const r = await runGitSafe(['-C', repoPath, 'fetch', 'origin', '--prune'], {
+      cwd: repoPath,
       reject: false,
       stdin: 'ignore',
-      timeout: timeoutMs,
-      extendEnv: false,
-      env: {
-        ...Object.fromEntries(Object.entries(env).filter(([k, v]) => v !== undefined && ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'].includes(k))),
-        GIT_TERMINAL_PROMPT: '0',
-        GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=20',
-      } as Record<string, string>,
+      timeoutMs,
+      env: Object.fromEntries(Object.entries(env).filter(([k, v]) => v !== undefined && ['PATH', 'HOME', 'USER', 'LOGNAME', 'LANG', 'SSH_AUTH_SOCK', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY'].includes(k))),
+      extraEnv: { GIT_TERMINAL_PROMPT: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o ConnectTimeout=20' },
     });
     return { exitCode: r.exitCode ?? 1, timedOut: r.timedOut === true, stderr: String(r.stderr ?? '').split('\n').slice(-3).join(' | ').slice(0, 300) };
   } catch (err) {

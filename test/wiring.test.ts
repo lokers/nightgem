@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as nodeFs from 'node:fs';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1262,6 +1262,23 @@ describe('gitFetchOrigin (spec repo pre-fetch)', () => {
     const repo = makeRepo('p2');
     const r = await gitFetchOrigin(repo, 30_000, process.env);
     expect(r.exitCode).not.toBe(0);
+  });
+
+  it('runs no program planted in the repo config (uploadpack, fsmonitor) and still fetches', async () => {
+    const bare = join(home, 'origin-hostile.git');
+    sh(home, 'init', '-q', '--bare', bare);
+    const repo = makeRepo('p3');
+    sh(repo, 'remote', 'add', 'origin', bare);
+    sh(repo, 'push', '-q', 'origin', 'HEAD:refs/heads/main');
+    const marker = join(home, 'planted-ran');
+    const evil = join(home, 'evil.sh');
+    writeFileSync(evil, `#!/bin/sh\ntouch "${marker}"\nexec git-upload-pack "$@"\n`);
+    chmodSync(evil, 0o755);
+    sh(repo, 'config', 'remote.origin.uploadpack', evil);
+    sh(repo, 'config', 'core.fsmonitor', evil);
+    const r = await gitFetchOrigin(repo, 30_000, process.env);
+    expect(r).toMatchObject({ exitCode: 0, timedOut: false });
+    expect(existsSync(marker)).toBe(false);
   });
 });
 

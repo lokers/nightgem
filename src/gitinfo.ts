@@ -1,21 +1,23 @@
 /**
  * Small read-only git helpers used by the report generator (and reusable for baselines).
  *
- * Every helper takes an injectable `GitRunner` (default: `execa('git', args, { cwd })`) so tests
+ * Every helper takes an injectable `GitRunner` (default: `runGitSafe`, the hardened runner of `gitsafe.ts`) so tests
  * never need a real repository. A runner resolves with stdout and rejects on a non-zero exit.
  * Only `remoteHasBranch` / `checkRemoteBranch` swallow errors (by contract, yielding `unknown`); the others throw, and callers decide
  * how to render "unknown".
  */
 import { createHash } from 'node:crypto';
 
-import { execa } from 'execa';
+import { runGitSafe } from './gitsafe.ts';
 
 export type GitRunner = (args: readonly string[], opts: { cwd: string; timeoutMs?: number }) => Promise<string>;
 
 export const defaultGit: GitRunner = async (args, opts) => {
-  const result = await execa('git', [...args], {
+  // Hardened (see gitsafe.ts): a program planted in the repo's config or attributes never runs.
+  const result = await runGitSafe(args, {
     cwd: opts.cwd,
-    ...(opts.timeoutMs !== undefined ? { timeout: opts.timeoutMs } : {}),
+    env: process.env,
+    ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
   });
   return result.stdout;
 };

@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Security
+
+- nightgem's own git calls (tripwires, report, remote reads, the startup fetch) no longer run programs planted in a repo's `.git/config`, `.git/info/attributes` or hooks (`core.fsmonitor`, filters, textconv, `diff.external`, pager, `uploadpack`, credential helpers, ...): one hardened runner passes fixed and per-driver `-c` overrides and a trusted environment (#7)
+
 ### Added
 
 - `npm link` puts `nightgem` on your PATH from a clone (the bins resolve `src/` and `dist/` through the symlink), `uninstall` prints the `npm unlink -g nightgem` hint, and the docs use `nightgem <command>` (#8)
