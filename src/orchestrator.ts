@@ -31,6 +31,13 @@
  *   server process died / failed to start        -> failed          stopReason `server-exited` / `server-start-failed`
  *   any exception                                -> failed          stopReason `exception: <message>`
  *
+ * Attempts: every run is one or more attempts (the first launch, then each `resume`). The last entry of `RUN.json.attempts`
+ * is the attempt this process runs. At start it must be open, carry the manifest's `budgetUsd`, and the control flags must
+ * be clear (the `resume` CLI resets them); otherwise the run fails with an `attempt-invariant` defect and touches nothing
+ * else. A manifest without `attempts` (v1, or a fresh launch) gets its implicit attempt 1 written at start. `finalize`
+ * closes the open attempt on every end path in the same write that sets the final state: `endedAt`, `state`,
+ * `stopReason` and `costUsd` (the attempt spend, multiplied, not cumulative). `RUN.json.costUsd` stays the cumulative run cost.
+ *
  * Exit code: 0 for `completed`, 1 otherwise (`FinalState.exitCode`). A restart on a terminal run is a no-op (exit 0).
  * Violations in OTHER workspace repos never stop the run: they become `tripwire-other-repo` defects and are re-baselined.
  */
@@ -40,6 +47,8 @@ import { join } from 'node:path';
 import type { BudgetLedger } from './budget.ts';
 import { isRunApiError } from './client.ts';
 import {
+  attemptsOf,
+  isTerminalRunState,
   parseModelRef,
   TaskEvent,
   type ControlFlags,
@@ -60,6 +69,7 @@ import {
   acquireLock,
   isRestartNoop,
   readJsonl,
+  readControlFlags,
   readLockInfo,
   readManifest,
   StateError,
@@ -120,6 +130,8 @@ export interface StateOps {
   /** Who holds the lock (read-only), for the CLI -> orchestrator handoff. */
   lockInfo(lockPath: string): { pid: number; slug?: string } | undefined;
   updateControlFlags(controlDir: string, patch: Partial<ControlFlags>): ControlFlags;
+  /** Read-only: the start-up assertion that no stop flag survived from an earlier attempt. */
+  readControlFlags(controlDir: string): ControlFlags;
   touchHeartbeat(controlDir: string, nowMs: number): ControlFlags;
   readTasks(path: string): TaskEvent[];
   exists(path: string): boolean;
@@ -131,6 +143,7 @@ export const realStateOps: StateOps = {
   acquireLock,
   lockInfo: readLockInfo,
   updateControlFlags,
+  readControlFlags,
   touchHeartbeat,
   readTasks: (path) => readJsonl(path, TaskEvent).items,
   exists: (path) => existsSync(path),
@@ -514,7 +527,34 @@ class Run {
         this.d.signals.on(sig, () => this.requestStop({ kind: 'signal', state: 'stopped', stopReason: `signal:${sig}`, sequence: 'graceful' })),
       );
     }
-    this.setState('running', { pid: this.d.pid, ...(manifest.startedAt ? {} : { startedAt: this.iso() }) });
+    const violation = this.startInvariantViolation(manifest);
+    if (violation) {
+      // Fail loudly and change nothing else: a closed attempt, a wrong budget or a stale stop flag means the resume
+      // transition did not happen as designed, and running on would stop or overspend wrongly.
+      this.log('attempt.invariant_failed', { message: violation });
+      this.addDefect('attempt-invariant', violation);
+      this.final = { state: 'failed', stopReason: 'attempt-invariant' };
+      return;
+    }
+    // children of earlier attempts' roots keep their phase
+    for (const r of manifest.rootSessions) this.phaseBySession.set(r.sessionId, r.phase);
+    const startedAt = manifest.startedAt ?? this.iso();
+    this.setState('running', {
+      pid: this.d.pid,
+      ...(manifest.startedAt ? {} : { startedAt }),
+      // a v1 manifest or a fresh launch has no attempts yet: record the implicit attempt 1
+      ...(manifest.attempts === undefined ? { attempts: [{ n: 1, startedAt, budgetUsd: manifest.budgetUsd, costAtStartUsd: 0 }] } : {}),
+    });
+    const attempt = attemptsOf(this.manifestState ?? manifest).at(-1);
+    this.log('attempt.start', {
+      attempt: attempt?.n,
+      budgetUsd: this.d.ledger.budgetUsd,
+      costAtStartUsd: this.d.ledger.costAtStartUsd,
+      baselineUsd: this.d.ledger.baselineUsd,
+      attemptSpendUsd: this.d.ledger.attemptSpendUsd,
+      cumulativeUsd: this.d.ledger.cumulativeUsd,
+      priorCostUsd: manifest.costUsd,
+    });
     this.startHeartbeat();
 
     if (!(await this.startup(manifest))) return;
@@ -539,6 +579,32 @@ class Run {
       return;
     }
     this.final = this.normalFinal();
+  }
+
+  /**
+   * The start-up assertions (see the header). Returns a message when one fails, else undefined. The last attempt is the one
+   * this process runs; for a manifest without `attempts` it is the implicit attempt, which is open by construction.
+   */
+  private startInvariantViolation(manifest: RunManifest): string | undefined {
+    const last = attemptsOf(manifest).at(-1);
+    if (!last) return 'RUN.json has an empty attempts list: there is no attempt to run';
+    if (last.endedAt !== undefined) {
+      return `attempt ${last.n} is already closed (endedAt ${last.endedAt}); the resume transition must append a new open attempt`;
+    }
+    if (last.budgetUsd !== manifest.budgetUsd) {
+      return `attempt ${last.n} budget $${last.budgetUsd} does not match RUN.json budgetUsd $${manifest.budgetUsd}`;
+    }
+    if (this.d.ledger.budgetUsd !== manifest.budgetUsd) {
+      return `the ledger budget $${this.d.ledger.budgetUsd} does not match RUN.json budgetUsd $${manifest.budgetUsd}`;
+    }
+    try {
+      const flags = this.st.readControlFlags(this.d.paths.controlDir);
+      const set = [flags.hardStop ? 'hardStop' : '', flags.softStop ? 'softStop' : ''].filter(Boolean);
+      if (set.length > 0) return `control.json still has ${set.join(' and ')} set; the resume CLI must reset the stop flags before the attempt starts`;
+    } catch (err) {
+      return `control.json cannot be read: ${errMsg(err)}`;
+    }
+    return undefined;
   }
 
   /** `completed` only if all four normal phases finished; otherwise the soft limit that cut the run short decides. */
@@ -1025,8 +1091,15 @@ class Run {
     this.softHandled = true;
     const reason: SoftReason = this.softReason ?? 'budget-soft';
     this.softReason = reason;
-    const total = this.d.ledger.total();
-    this.log('budget.soft', { phase, reason, costUsd: total.effectiveUsd, budgetUsd: this.d.ledger.budgetUsd });
+    // the thresholds compare the attempt spend with the attempt's budget; the cumulative cost is logged beside it
+    const attemptSpendUsd = this.d.ledger.attemptSpendUsd;
+    this.log('budget.soft', {
+      phase,
+      reason,
+      attemptSpendUsd,
+      cumulativeUsd: this.d.ledger.cumulativeUsd,
+      budgetUsd: this.d.ledger.budgetUsd,
+    });
     if (phase === 'report') return; // already writing the narrative; just remember it for stopReason
     this.windingDown = true;
     this.skipToReport = true;
@@ -1045,7 +1118,7 @@ class Run {
       'wind-down',
       this.promptVars({
         reason: reason === 'wallclock-soft' ? 'wall clock soft limit reached (30 minutes left)' : 'budget soft limit reached',
-        costUsd: total.effectiveUsd.toFixed(2),
+        costUsd: attemptSpendUsd.toFixed(2),
         budgetUsd: this.d.ledger.budgetUsd.toFixed(2),
       }),
     );
@@ -1140,21 +1213,36 @@ class Run {
     });
   }
 
+  /**
+   * Mirror the ledger into RUN.json.
+   * - `costUsd` is the run's CUMULATIVE cost (all attempts; the next resume reads it as `costAtStartUsd`). It never
+   *   decreases: before the first reconcile of an attempt the ledger has seen no session, so its total is not yet the truth.
+   * - `rootSessions[].costUsd` is the cumulative cost of that root's PHASE across all attempts (every root of a phase shows
+   *   the same figure, as before). It is not a per-root or per-attempt cost: nothing may sum it. The report reads
+   *   `cost.jsonl` and `costUsd`, never this field.
+   * - the open (last) attempt's `costUsd` is the live attempt spend (multiplied, not cumulative).
+   */
   private recordLedger(): void {
     const total = this.d.ledger.total();
     const mult = this.d.ledger.costMultiplier;
     const phases = this.d.ledger.perPhase((id) => this.phaseOfSession(id));
+    const attemptSpend = this.d.ledger.attemptSpendUsd;
     const cur = this.manifestState;
+    const cumulative = Math.max(total.effectiveUsd, cur?.costUsd ?? 0);
+    const last = cur?.attempts?.at(-1);
     const unchanged =
       cur !== undefined &&
-      cur.costUsd === total.effectiveUsd &&
+      cur.costUsd === cumulative &&
       cur.costEstimatedUsd === total.estimatedUsd * mult &&
-      cur.rootSessions.every((r) => r.costUsd === phases[r.phase].effectiveUsd);
+      cur.rootSessions.every((r) => r.costUsd === Math.max(r.costUsd, phases[r.phase].effectiveUsd)) &&
+      (last === undefined || last.endedAt !== undefined || last.costUsd === attemptSpend);
     if (unchanged) return;
     this.safeUpdate((m) => {
-      m.costUsd = total.effectiveUsd;
+      m.costUsd = Math.max(total.effectiveUsd, m.costUsd);
       m.costEstimatedUsd = total.estimatedUsd * mult;
-      for (const r of m.rootSessions) r.costUsd = phases[r.phase].effectiveUsd;
+      for (const r of m.rootSessions) r.costUsd = Math.max(r.costUsd, phases[r.phase].effectiveUsd);
+      const open = m.attempts?.at(-1);
+      if (open && open.endedAt === undefined) open.costUsd = attemptSpend;
     });
   }
 
@@ -1294,10 +1382,22 @@ class Run {
     } catch (err) {
       this.log('worktrees.failed', { error: errMsg(err) });
     }
+    const attemptSpendUsd = this.d.ledger.attemptSpendUsd;
     this.safeUpdate((m) => {
+      // a manifest without `attempts` (v1, or the start write never landed) gets its implicit attempt first, from the
+      // top-level fields as they were before this final write
+      if (m.attempts === undefined) m.attempts = attemptsOf(m).map((a) => ({ ...a }));
       m.state = fin.state;
       if (fin.stopReason !== undefined) m.stopReason = fin.stopReason;
       m.endedAt = this.iso();
+      // close the open attempt in the same write, on every end path; a closed one (a failed start assertion) is left alone
+      const open = m.attempts.at(-1);
+      if (open && open.endedAt === undefined) {
+        open.endedAt = m.endedAt;
+        open.state = isTerminalRunState(fin.state) ? fin.state : 'failed';
+        if (fin.stopReason !== undefined) open.stopReason = fin.stopReason;
+        open.costUsd = attemptSpendUsd;
+      }
     });
     this.log('final', { ...fin });
     try {
