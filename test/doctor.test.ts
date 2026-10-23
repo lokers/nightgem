@@ -546,6 +546,25 @@ describe('cli on PATH', () => {
     expect(c.detail).toContain(`\`npm unlink -g nightgem && npm link\` in ${CHECKOUT}`);
   });
 
+  it('with a very long checkout path the default line stays within the cap and keeps the fix; --verbose keeps the paths', () => {
+    const longRoot = `/Users/alice/${'a-long-directory-name/'.repeat(7)}nightgem`;
+    expect(longRoot.length).toBeGreaterThanOrEqual(150);
+    const bin = `${longRoot}/bin/nightgem.mjs`;
+    const other = `/Users/alice/${'another-long-one/'.repeat(7)}old/bin/nightgem.mjs`;
+    const mk = (fsx: ReturnType<typeof fakePathFs>) => cliOnPathCheck({ env, fs: fsx, cliBinPath: bin });
+    const missing = mk(fakePathFs([bin]));
+    const stale = mk(fakePathFs([bin, other], { '/Users/alice/.npm/bin/nightgem': other }));
+    for (const [c, fix] of [[missing, '`npm link`'], [stale, '`npm unlink -g nightgem && npm link`']] as const) {
+      const line = formatDoctor({ checks: [c] });
+      expect(line.length).toBeLessThanOrEqual(MAX_LINE);
+      expect(line).toContain(fix);
+      expect(line).toContain('in this checkout');
+      expect(line).not.toContain('doctor --verbose');
+      expect(formatDoctor({ checks: [c] }, { verbose: true })).toContain(`in ${longRoot}`);
+    }
+    expect(formatDoctor({ checks: [stale] }, { verbose: true })).toContain('another-long-one');
+  });
+
   it('uses the env PATH it is given, first match wins, relative entries are ignored', () => {
     const other = '/Users/alice/old/nightgem/bin/nightgem.mjs';
     const fsx = fakePathFs([BIN, other], { '/first/nightgem': other, '/Users/alice/.npm/bin/nightgem': BIN });

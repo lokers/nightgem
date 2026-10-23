@@ -156,17 +156,17 @@ export function cliOnPathCheck(input: { env: Readonly<Record<string, string | un
     .map((dir) => join(dir, BIN_NAME))
     .find((candidate) => input.fs.exists(candidate));
   if (found === undefined) {
-    return { name, ok: false, hard: false, detail: `${BIN_NAME} is not on the PATH (the slash commands still work). To add it, run \`npm link\` in ${checkout}` };
+    const detail = `${BIN_NAME} is not on the PATH (the slash commands still work). To add it, run \`npm link\` in ${checkout}`;
+    return withSummary({ name, ok: false, hard: false, detail }, `${BIN_NAME} is not on the PATH; run \`npm link\` in this checkout`);
   }
   const target = real(found);
   if (target === real(input.cliBinPath)) return { name, ok: true, hard: false, detail: `${BIN_NAME} -> ${checkout}` };
   const other = /\/bin\/[^/]+$/.test(target) ? dirname(dirname(target)) : target;
-  return {
-    name,
-    ok: false,
-    hard: false,
-    detail: `${BIN_NAME} on the PATH resolves to ${other}, not this checkout. To fix it, run \`npm unlink -g ${BIN_NAME} && npm link\` in ${checkout}`,
-  };
+  const detail = `${BIN_NAME} on the PATH resolves to ${other}, not this checkout. To fix it, run \`npm unlink -g ${BIN_NAME} && npm link\` in ${checkout}`;
+  return withSummary(
+    { name, ok: false, hard: false, detail },
+    `${BIN_NAME} on the PATH points at another checkout; run \`npm unlink -g ${BIN_NAME} && npm link\` in this checkout`,
+  );
 }
 
 export async function doctor(opts: DoctorOptions): Promise<DoctorResult> {
