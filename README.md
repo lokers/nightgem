@@ -201,6 +201,10 @@ Doctor failures, canary failures, stale locks and stalled runs: **[docs/troubles
 
 **Where are my results?** `<workspaceRoot>/.specs/<slug>/REPORT.md` and the branches under `<repo>/.worktrees/<slug>/`.
 
+## Author
+
+nightgem is written and maintained by **Lukasz Goslawski** ([@lokers](https://github.com/lokers) on GitHub). Questions, ideas and bug reports are welcome as [issues](https://github.com/lokers/nightgem/issues); for security problems, follow [SECURITY](SECURITY.md).
+
 ## Disclaimer
 
 nightgem is **experimental** software that runs an AI agent unattended and spends real money. Use a **dedicated, spend-capped API key**, run it on a machine and account where you could live with the worst case, and review everything it builds before you use it. You are responsible for the cost of every run and for any code it produces. The software is provided as is, without warranty of any kind, under the [MIT License](LICENSE).
