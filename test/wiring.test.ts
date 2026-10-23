@@ -508,6 +508,61 @@ describe('deps construct without side effects', () => {
     }
   });
 
+  describe('ledger re-hydration from cost.jsonl and the attempts', () => {
+    const costLine = (sessionId: string, costUsd: number, phase = 'build') =>
+      JSON.stringify({ ts: '2026-10-20T10:00:00.000Z', sessionId, parentId: null, phase, costUsd, estimated: false, source: 'session-info', totalUsd: costUsd });
+    const writeCost = (lines: string[]) => {
+      const paths = runPaths(SLUG, { home, workspaceRoot });
+      mkdirSync(paths.runDir, { recursive: true });
+      writeFileSync(paths.costJsonl, `${lines.join('\n')}\n`);
+    };
+    const info = (id: string, cost: number) => ({ id, cost, time: { created: 1, updated: 2 }, location: { directory: '/tmp/run' } }) as never;
+
+    it('two attempts: baselines from the latest cost.jsonl lines (a malformed line is skipped), costAtStartUsd from the last attempt', () => {
+      const attempts = [
+        { n: 1, startedAt: '2026-10-20T09:00:00.000Z', endedAt: '2026-10-20T10:00:00.000Z', state: 'aborted-budget', stopReason: 'budget-hard', budgetUsd: 5, costAtStartUsd: 0, costUsd: 4 },
+        { n: 2, startedAt: '2026-10-21T09:00:00.000Z', budgetUsd: 42, costAtStartUsd: 12 },
+      ];
+      writeRun({ attempts });
+      writeCost([costLine('p1', 1, 'plan'), 'not json {', costLine('b1', 1.5), costLine('b1', 3)]);
+      const before = snapshotTree(home);
+      const d = realOrchestratorDeps(SLUG, home, { env: {} });
+      expect(snapshotTree(home)).toEqual(before);
+      expect(d.ledger.baselineUsd).toBeCloseTo(4 * 3); // (1 + 3) raw, times the manifest multiplier 3
+      expect(d.ledger.costAtStartUsd).toBe(12); // the last attempt's, not the first's 0
+      expect(d.ledger.budgetUsd).toBe(42);
+      d.ledger.ingestSession(info('p1', 1));
+      d.ledger.ingestSession(info('b1', 3));
+      expect(d.ledger.cumulativeUsd).toBeCloseTo(12);
+      expect(d.ledger.attemptSpendUsd).toBe(0);
+      // old sessions keep the phase from cost.jsonl
+      expect(d.ledger.perPhase(() => 'report').plan.costUsd).toBe(1);
+      expect(d.ledger.toCostLines(() => 'report')).toEqual([]);
+    });
+
+    it('a v1 manifest has one implicit attempt with costAtStartUsd 0', () => {
+      writeRun({ costUsd: 6 });
+      writeCost([costLine('a', 2)]);
+      const d = realOrchestratorDeps(SLUG, home, { env: {} });
+      expect(d.ledger.costAtStartUsd).toBe(0);
+      expect(d.ledger.baselineUsd).toBeCloseTo(6);
+      d.ledger.ingestSession(info('a', 2.5));
+      // the implicit attempt started at 0, so the floor makes attempt spend the whole cumulative cost (2.5 raw, times 3)
+      expect(d.ledger.attemptSpendUsd).toBeCloseTo(7.5);
+      expect(d.ledger.attemptSpendUsd).toBeCloseTo(d.ledger.cumulativeUsd);
+    });
+
+    it('a missing cost.jsonl is a fresh run: zero baselines, attempt spend equals cumulative', () => {
+      writeRun();
+      expect(existsSync(runPaths(SLUG, { home, workspaceRoot }).costJsonl)).toBe(false);
+      const d = realOrchestratorDeps(SLUG, home, { env: {} });
+      expect(d.ledger.baselineUsd).toBe(0);
+      expect(d.ledger.costAtStartUsd).toBe(0);
+      d.ledger.ingestSession(info('a', 2));
+      expect(d.ledger.attemptSpendUsd).toBe(d.ledger.cumulativeUsd);
+    });
+  });
+
   it('sandbox is on by default', () => {
     writeRun();
     expect(realOrchestratorDeps(SLUG, home, { env: {} }).sandbox).toBe(true);

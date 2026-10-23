@@ -11,7 +11,7 @@
  *   every session in the run's database is the *cumulative* cost (never under-counts: the database survives across
  *   attempts). The *attempt spend* is what the soft and hard thresholds compare with `budgetUsd`: per session,
  *   `max(0, current - baseline)` where the baseline is the session's latest `cost.jsonl` line at construction
- *   (`costLines`), plus the whole cost of any session new in this attempt. With no `cost.jsonl` every baseline is 0 and
+ *   (`costLines`, clamped down to the session's first observed value, never raised), plus the whole cost of any session new in this attempt. With no `cost.jsonl` every baseline is 0 and
  *   attempt spend equals cumulative spend. If `cost.jsonl` lags behind the database after a crash the baselines are
  *   too low, so the attempt spend over-counts: the safe direction. As a second floor, when `costAtStartUsd` is given
  *   (the cumulative cost recorded when the attempt began) the attempt spend is never below `cumulative - costAtStart`,
@@ -104,7 +104,8 @@ export class BudgetLedger {
   private readonly seededPhases = new Map<string, Phase>();
   /** Raw cost of each session at the start of this attempt (latest `cost.jsonl` line). */
   private readonly baselines = new Map<string, number>();
-  private readonly costAtStartUsd: number;
+  /** The cumulative effective cost recorded when this attempt began (floors the attempt spend). */
+  readonly costAtStartUsd: number;
   private readonly listeners = new Set<(event: BudgetEvent) => void>();
   private readonly fired = new Set<BudgetEvent>();
   private level: BudgetLevel = 'ok';
@@ -169,6 +170,13 @@ export class BudgetLedger {
     if (reported === 0 && totalTokens(info.tokens) > 0) {
       valueUsd = estimateCost(info.tokens, model);
       estimated = true;
+    }
+
+    // A session's first ingest may come in below its cost.jsonl baseline (a real cost replaced a higher estimate, or a
+    // re-estimate is lower). Clamp the baseline down to it: growth from the lower value must count. Never raised.
+    if (!prev) {
+      const base = this.baselines.get(info.id);
+      if (base !== undefined && valueUsd < base) this.baselines.set(info.id, valueUsd);
     }
 
     const parentId = info.parentID ?? prev?.parentId;

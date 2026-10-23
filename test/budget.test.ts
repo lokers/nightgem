@@ -310,7 +310,7 @@ describe('BudgetLedger resume across attempts', () => {
     expect(l.check()).toBe('soft');
     expect(l.check()).toBe('soft');
     expect(events).toEqual(['soft']);
-    l.ingestSession(session('b1', 3.15, { parentID: 'p1' })); // 0.85 + 0.15 = 1.00
+    l.ingestSession(session('b1', 3.2, { parentID: 'p1' })); // 0.85 + 0.2 = 1.05, clear of float noise
     expect(l.check()).toBe('hard');
     expect(l.check()).toBe('hard');
     l.ingestSession(session('n1', 5));
@@ -514,5 +514,67 @@ describe('BudgetLedger overshoot tolerance', () => {
     l.ingestSession(session('a', 1)); // stale lower snapshot: not a step
     l.ingestSession(session('a', 1.5)); // step 0.5
     expect(l.overshootTolerance(['a'])).toBeCloseTo(2 * 3); // first step 2 is the max
+  });
+});
+
+describe('BudgetLedger baseline clamp, restart inside an attempt, and once-per-ledger events', () => {
+  const tokens = { input: 1_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+  const haiku = { providerID: 'anthropic', id: 'claude-haiku-5-5' };
+
+  it('counts growth from a lower real cost that replaced a higher estimate (no under-count)', () => {
+    const estimate = estimateCost({ input: 1_000_000, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, 'anthropic/claude-haiku-5-5');
+    expect(estimate).toBeGreaterThan(0.3);
+    const prior = [line('a', estimate, 'build', { estimated: true, source: 'estimate' })];
+    // the costAtStart floor (0.3 - estimate < 0) cannot help here: the clamp is what carries the growth
+    const clamped = ledger({ budgetUsd: 10, costLines: prior, costAtStartUsd: estimate });
+    clamped.ingestSession(session('a', 0.1, { tokens }));
+    clamped.ingestSession(session('a', 0.3, { tokens }));
+    expect(clamped.baselineUsd).toBeCloseTo(0.1);
+    expect(clamped.attemptSpendUsd).toBeCloseTo(0.2);
+  });
+
+  it('clamps a lower re-estimate the same way, and never raises a baseline', () => {
+    const high = estimateCost(tokens, 'anthropic/claude-haiku-5-5');
+    const l = ledger({ budgetUsd: 10, costLines: [line('a', high, 'build', { estimated: true, source: 'estimate' })], costAtStartUsd: high });
+    l.ingestSession(session('a', 0, { model: haiku, tokens: { ...tokens, input: 500_000 } })); // re-estimate: half
+    expect(l.baselineUsd).toBeCloseTo(high / 2);
+    // a higher first value leaves the baseline alone
+    const m = ledger({ budgetUsd: 10, costLines: [line('a', 1)], costAtStartUsd: 1 });
+    m.ingestSession(session('a', 2.5));
+    expect(m.baselineUsd).toBe(1);
+    expect(m.attemptSpendUsd).toBeCloseTo(1.5);
+    // only the first ingest clamps: a later dip does not move it again
+    const n = ledger({ budgetUsd: 10, costLines: [line('a', 3)], costAtStartUsd: 3 });
+    n.ingestSession(session('a', 3));
+    n.ingestSession(session('a', 1));
+    expect(n.baselineUsd).toBe(3);
+  });
+
+  it('a restart inside attempt 2 counts only attempt 2: n1 is already in cost.jsonl', () => {
+    const lines = [line('p1', 1, 'plan'), line('b1', 3, 'build'), line('n1', 0.6, 'build')];
+    const l = ledger({ budgetUsd: 10, costLines: lines, costAtStartUsd: 4 });
+    l.ingestSession(session('p1', 1));
+    l.ingestSession(session('b1', 3));
+    l.ingestSession(session('n1', 0.8));
+    expect(l.attemptSpendUsd).toBeCloseTo(0.8); // 0.6 from before the restart + 0.2 of growth, via the floor
+    expect(l.cumulativeUsd).toBeCloseTo(4.8);
+  });
+
+  it('a new ledger (a restart) fires soft again: the events are once per ledger, i.e. once per process', () => {
+    const lines = [line('a', 0.9, 'build')];
+    const first = ledger({ budgetUsd: 1, costLines: lines, costAtStartUsd: 0 });
+    const e1: BudgetEvent[] = [];
+    first.onEvent((e) => e1.push(e));
+    first.ingestSession(session('a', 0.9));
+    first.check();
+    first.check();
+    expect(e1).toEqual(['soft']);
+    // the process restarts: the same spend, a fresh ledger, the floor keeps it above soft
+    const second = ledger({ budgetUsd: 1, costLines: lines, costAtStartUsd: 0 });
+    const e2: BudgetEvent[] = [];
+    second.onEvent((e) => e2.push(e));
+    second.ingestSession(session('a', 0.9));
+    second.check();
+    expect(e2).toEqual(['soft']);
   });
 });

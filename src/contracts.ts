@@ -206,6 +206,7 @@ export const RunAttempt = z.object({
   stopReason: z.string().optional(),
   budgetUsd: z.number().positive(),
   costAtStartUsd: z.number().nonnegative(),
+  /** Attempt spend (multiplied), not cumulative. */
   costUsd: z.number().nonnegative().optional(),
 });
 export type RunAttempt = z.infer<typeof RunAttempt>;

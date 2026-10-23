@@ -1334,7 +1334,7 @@ export function realOrchestratorDeps(slug: string, home: string = homedir(), opt
 
   // Re-hydrate across attempts. The run's database already holds every earlier attempt's sessions (cumulative cost);
   // cost.jsonl gives each session's cost at attempt start, so only growth since then counts against this attempt's
-  // budget. A missing file reads as empty (fresh run). Malformed lines are skipped, which only lowers a baseline: safe.
+  // budget. A missing file reads as empty (fresh run). Malformed lines are skipped, which can only drop a baseline to an older, lower value: the attempt spend over-counts, which is safe.
   // The current attempt's costAtStartUsd floors the attempt spend, so a restart inside one attempt cannot hide spend.
   const priorCost = readJsonl(paths.costJsonl, CostLine).items;
   const currentAttempt = attemptsOf(manifest).at(-1);
