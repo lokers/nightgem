@@ -3,7 +3,7 @@
 All notable changes to nightgem are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves experimental status.
 
-## [0.1.0] - unreleased
+## [0.1.0] - 2026-10-23
 
 First public release. Experimental: macOS only, run from a clone (not published to npm yet).
 
@@ -33,3 +33,6 @@ First public release. Experimental: macOS only, run from a clone (not published 
 - macOS only; depends on `sandbox-exec`, which Apple has deprecated.
 - Cost is an estimate, and overshoot at the hard stop is bounded, not zero.
 - Attaching OpenCode.app to a running job to watch it live is untested.
+- Shell heredocs fail inside the sandbox (they cannot create their temp file), so agents fall back to the file-write tool.
+
+[0.1.0]: https://github.com/lokers/nightgem/releases/tag/v0.1.0
