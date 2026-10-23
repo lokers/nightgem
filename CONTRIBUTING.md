@@ -54,6 +54,17 @@ ci: Add macOS test workflow
 
 Common types are `feat`, `fix`, `docs`, `test`, `refactor`, `chore` and `ci`. Keep the subject short and say *why* in the body when it is not obvious. Examples, tests and docs in this repo use only the neutral ticket key `JIRA-123`.
 
+## Issues
+
+Work is tracked in [GitHub issues](https://github.com/lokers/nightgem/issues), grouped into milestones per release.
+
+- Reference the issue in the body of every commit that works on it. Write `Refs #12` for partial work, and `Closes #12` in the commit (or pull request description) that completes it. GitHub closes the issue as completed when that commit reaches `main`.
+- One issue can need several commits or pull requests. Use `Closes` only on the last one.
+- After the merge, check that the issue is closed as completed and links the commit or pull request. If it did not close (for example, the keyword was missing), close it by hand with a comment naming the commit: `gh issue close 12 --reason completed --comment "Done in <sha>"`.
+- Close an issue you decide not to do as "not planned", with the reason.
+- The CHANGELOG line for the change ends with the issue number, for example `(#12)`.
+- A release closes its milestone; anything left open moves to the next milestone.
+
 ## Branches and worktrees
 
 - Fork the repo and branch from a freshly fetched `main`. Name the branch `<type>/<topic>`, where the type is the conventional-commit type: `feat/budget-ledger`, `fix/stale-lock`.
@@ -115,6 +126,7 @@ The pull request template has the same list. Before you ask for review:
 - [ ] `npm run build` and `npm run pack:check` pass, if I touched packaging, `bin/` or `package.json`.
 - [ ] No personal or company data, secrets, or real ticket keys in any tracked file, fixture or commit message.
 - [ ] The commit subjects are conventional and in sentence case.
+- [ ] The pull request description or the final commit says `Closes #<issue>` for every issue it completes, and `Refs #<issue>` for partial work.
 - [ ] **If I touched a safety-critical file:** I said so in the pull request, I extended the probes and tests, I deleted no probe, and I know a maintainer review is required.
 - [ ] README and docs are updated for any change in behaviour, commands, environment variables or the safety model.
 

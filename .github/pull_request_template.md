@@ -1,6 +1,8 @@
 ## What and why
 
-<!-- What does this change, and why? Link the issue if there is one. -->
+<!-- What does this change, and why? -->
+
+Closes #<!-- issue number; use "Refs #N" instead for partial work -->
 
 ## Checklist
 
@@ -13,6 +15,7 @@
   - [ ] Yes: I listed the files below, extended `profile/corpus.txt` and the related tests, and deleted no probe
 - [ ] Docs updated (README, `docs/`, `AGENTS.md`, CHANGELOG) if behaviour, commands, environment variables or the safety model changed
 - [ ] Commit subjects are conventional and in sentence case (`feat: Add budget ledger`)
+- [ ] Every issue this completes is listed as `Closes #N` above
 
 ## Safety-critical files touched
 

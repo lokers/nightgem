@@ -49,7 +49,7 @@ Tracked files must not contain personal paths, company or employer names, produc
 
 ## Commits
 
-Conventional commits with a sentence-case subject: `feat: Add budget ledger`, `fix: Handle stale lock`, `docs: Update README`. Work on a branch such as `feat/<topic>` or `fix/<topic>`, in a git worktree under `.worktrees/<topic>`. Do not push, open PRs or merge from this repo's tooling or tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
+Conventional commits with a sentence-case subject: `feat: Add budget ledger`, `fix: Handle stale lock`, `docs: Update README`. Reference the GitHub issue in the commit body: `Refs #N` for partial work, `Closes #N` on the commit that completes it, and end the CHANGELOG line with `(#N)`. After it lands on `main`, check the issue closed as completed (`gh issue view N --json state,stateReason`); if not, close it with `gh issue close N --reason completed --comment "Done in <sha>"`. Work on a branch such as `feat/<topic>` or `fix/<topic>`, in a git worktree under `.worktrees/<topic>`. Do not push, open PRs or merge from this repo's tooling or tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide.
 
 ## Module map
 
