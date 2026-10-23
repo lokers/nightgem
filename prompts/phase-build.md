@@ -9,8 +9,10 @@ No human is present. Do not ask questions. Decide and log.
 **On a resumed run** (`{{tasksJsonl}}` already shows work from an earlier attempt): use the existing `{{planMd}}` and
 `{{tasksJsonl}}` and do not re-plan. Continue the `todo` and `running` tasks, and the tasks the wind-down of an earlier
 attempt parked, in their existing worktrees and branches. Parked tasks are those whose latest state is `blocked` or `skipped`
-with a `blockedReason` (or `skippedReason`) starting with `wind-down:`. Treat them as `todo` and log a new TaskEvent as you
-restart them. Tasks `blocked` or `skipped` for any other reason stay as they are. Never recreate, reset or delete an existing
+with a `blockedReason` starting with `wind-down:`. Treat them as `todo` and log a new TaskEvent as you
+restart them. Tasks `blocked` or `skipped` for any other reason stay as they are. Do not append the `phase:build` done event while a
+parked task has no newer event: finish it, or log it again as `blocked` or `skipped` with a reason that does not start with
+`wind-down:`. Never recreate, reset or delete an existing
 worktree or branch: check `git -C <repo> worktree list` first and reuse what is there (look at its `git status` and log for
 what was already done, including `wip:` commits). Never redo a `done` task.
 2. Per repo: create the `_integration` worktree and branch, per the system instructions, unless they already exist. Do not run `git fetch`: `origin` was

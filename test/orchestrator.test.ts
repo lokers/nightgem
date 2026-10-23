@@ -17,6 +17,7 @@ import {
   PHASE_ORDER,
   realStateOps,
   runOrchestrator,
+  windDownParked,
   type FinalState,
   type OrchestratorConfig,
   type OrchestratorDeps,
@@ -1947,7 +1948,15 @@ describe('resume: phases (AD8)', () => {
   });
 
   it('a wound-down attempt 1 (review-lite wrote phase:review and run-complete.json): build, the FULL review, then the report; the old markers are renamed', async () => {
-    const { h } = resumed({}, [planDone, taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }), reviewDone]);
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'phase-build') srv.appendTask({ id: 'docs', state: 'done', phase: 'build' }); // the re-opened task is finished
+          autoPhases(rec, srv);
+        },
+      },
+      [planDone, taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }), reviewDone],
+    );
     seedReviewMarkers(h, true);
     const old = [readFileSync(runComplete(h), 'utf8'), readFileSync(finalReview(h), 'utf8'), readFileSync(liteMarker(h), 'utf8')];
     const res = await h.run();
@@ -1997,10 +2006,10 @@ describe('resume: phases (AD8)', () => {
     expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
   });
 
-  it('an attempt that ended in a soft wind-down (a v1 run has no review-lite marker) does not count its review as done', async () => {
+  it.each(['budget-soft', 'wallclock-soft'])('an attempt that ended in a soft wind-down (%s; a v1 run has no review-lite marker) does not count its review as done', async (stopReason) => {
     const { h } = resumed({}, [planDone, buildDone, reviewDone]);
     seedReviewMarkers(h);
-    writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), attempts: [{ ...OLD, stopReason: 'budget-soft' }, OPEN] }));
+    writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), attempts: [{ ...OLD, stopReason }, OPEN] }));
     await h.run();
     expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
     expect(existsSync(join(h.paths.runDir, 'run-complete-attempt1.json'))).toBe(true);
@@ -2051,6 +2060,37 @@ describe('resume: phases (AD8)', () => {
     expect(lines.slice(2).every((l) => (JSON.parse(l) as { state: string }).state === 'done')).toBe(true);
   });
 
+  it('a review-lite whose marker could not be written (review-lite-marker-failed defect) makes the review not count as done', async () => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seedReviewMarkers(h);
+    writeManifest(
+      h.paths.runJson,
+      RunManifest.parse({ ...h.manifest(), defects: [{ ts: '2026-01-01T00:55:00.000Z', kind: 'review-lite-marker-failed', message: 'cannot record the review-lite marker: EROFS' }] }),
+    );
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
+    expect(existsSync(join(h.paths.runDir, 'run-complete-attempt1.json'))).toBe(true);
+  });
+
+  it('a rename that fails ends the start as failed / marker-rename-failed, before any phase runs', async () => {
+    const { h } = resumed({}, [planDone, reviewDone]);
+    seedReviewMarkers(h, true);
+    h.deps.state = {
+      ...h.deps.state,
+      rename: () => {
+        throw new Error('EPERM');
+      },
+    };
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'marker-rename-failed' });
+    expect(h.manifest().defects.map((d) => d.kind)).toEqual(['marker-rename-failed']);
+    expect(h.manifest().defects[0]!.message).toContain('EPERM');
+    expect(h.startInputs).toHaveLength(0);
+    expect(h.server.prompts).toHaveLength(0);
+    expect(existsSync(runComplete(h))).toBe(true); // nothing was half-moved
+  });
+
   it('an unreadable tasks.jsonl fails the start instead of planning again on top of finished work', async () => {
     const { h } = resumed();
     h.deps.state = {
@@ -2088,12 +2128,20 @@ describe('resume: parked tasks (AD9)', () => {
 
   it('the nudge of a resumed build names a task the wind-down parked, not a done one nor one blocked for a real reason', async () => {
     const texts: string[] = [];
-    const { h } = resumed({ script: stalledBuild(texts) }, [
-      taskLine('phase:plan', 'done', 'plan'),
-      taskLine('api', 'done', 'build', { repo: 'acme-api', branch: 'feat/api', worktree: '/Users/alice/work/acme-api/.worktrees/demo-run/api' }),
-      taskLine('infra', 'blocked', 'build', { blockedReason: 'needs credentials' }),
-      taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }),
-    ]);
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'nudge') srv.appendTask({ id: 'docs', state: 'done', phase: 'build' }); // the nudge gets the parked task finished
+          stalledBuild(texts)(rec, srv);
+        },
+      },
+      [
+        taskLine('phase:plan', 'done', 'plan'),
+        taskLine('api', 'done', 'build', { repo: 'acme-api', branch: 'feat/api', worktree: '/Users/alice/work/acme-api/.worktrees/demo-run/api' }),
+        taskLine('infra', 'blocked', 'build', { blockedReason: 'needs credentials' }),
+        taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }),
+      ],
+    );
     const res = await h.run();
     expect(res.state).toBe('completed');
     expect(texts).toHaveLength(1);
@@ -2134,5 +2182,86 @@ describe('resume: parked tasks (AD9)', () => {
     ]);
     await h.run();
     expect(texts[0]).toContain('the remaining work of this phase');
+  });
+
+  const parkedTasks = [
+    taskLine('phase:plan', 'done', 'plan'),
+    taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }),
+  ];
+
+  it('a phase:build done written after the parking events and before the offset does not skip the build: it runs and names the parked task', async () => {
+    const texts: string[] = [];
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'nudge') srv.appendTask({ id: 'docs', state: 'done', phase: 'build' }); // the parked task gets finished
+          stalledBuild(texts)(rec, srv);
+        },
+      },
+      [...parkedTasks, taskLine('phase:build', 'done', 'build')],
+    );
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-build', 'nudge', 'phase-review', 'phase-report']);
+    expect(h.logs.find((l) => l.event === 'resume.plan')?.fields).toMatchObject({ startPhase: 'build' });
+    expect(texts[0]).toContain('**docs**');
+  });
+
+  it('a resumed build that writes phase:build while the parked task is untouched does not complete: the phase stays not done and the agent is nudged', async () => {
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'phase-build') srv.completePhase(rec.sessionId, 'build', { afterMs: 10_000, costUsd: 0.5 }); // writes phase:build only
+          else if (rec.kind !== 'nudge') autoPhases(rec, srv);
+        },
+      },
+      parkedTasks,
+    );
+    const res = await h.run();
+    expect(res.state).not.toBe('completed');
+    expect(res.state).toBe('stalled');
+    expect(kinds(h)).not.toContain('phase-review');
+    expect(kinds(h)).not.toContain('phase-report');
+    const nudges = h.server.prompts.filter((p) => p.kind === 'nudge');
+    expect(nudges.length).toBeGreaterThan(0);
+    expect(nudges[0]!.text).toContain('**docs**');
+    expect(h.logs.some((l) => l.event === 'phase.end' && l.fields.phase === 'build' && l.fields.outcome === 'done')).toBe(false);
+  });
+
+  it('once the parked task has a newer event after the offset (done, or blocked again with a real reason), phase:build counts', async () => {
+    for (const again of [{ state: 'done' }, { state: 'blocked', blockedReason: 'needs credentials' }] as const) {
+      const { h } = resumed(
+        {
+          script: (rec, srv) => {
+            if (rec.kind === 'phase-build') {
+              srv.appendTask({ id: 'docs', phase: 'build', ...again });
+              srv.completePhase(rec.sessionId, 'build', { afterMs: 10_000, costUsd: 0.5 });
+            } else autoPhases(rec, srv);
+          },
+        },
+        parkedTasks,
+      );
+      const res = await h.run();
+      expect(res.state, again.state).toBe('completed');
+      expect(kinds(h), again.state).toEqual(['phase-build', 'phase-review', 'phase-report']);
+    }
+  });
+
+  it('windDownParked: only the latest event before the offset counts, and phase / integration / wind-down lines are not tasks', () => {
+    const ev = (id: string, state: string, blockedReason?: string) =>
+      JSON.parse(taskLine(id, state, 'build', blockedReason ? { blockedReason } : {})) as import('../src/contracts.ts').TaskEvent;
+    const events = [
+      ev('a', 'blocked', 'wind-down: x'),
+      ev('b', 'skipped', 'wind-down: y'),
+      ev('c', 'blocked', 'wind-down: z'),
+      ev('c', 'done'),
+      ev('d', 'blocked', 'needs credentials'),
+      ev('integration:acme-api', 'blocked', 'wind-down: x'),
+      ev('wind-down:note', 'blocked', 'wind-down: x'),
+      ev('e', 'blocked', 'wind-down: late'),
+    ];
+    expect(windDownParked(events, 7)).toEqual(['a', 'b']); // e is after the offset
+    expect(windDownParked(events, 8)).toEqual(['a', 'b', 'e']);
+    expect(windDownParked(events, 0)).toEqual([]);
   });
 });

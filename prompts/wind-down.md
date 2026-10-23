@@ -16,4 +16,5 @@ WIND-DOWN for run `{{slug}}` ({{reason}}; spent ${{costUsd}} of ${{budgetUsd}}).
 6. Leave every integration branch in a reviewable state: committed (`wip:` where needed), no half-finished merge, and no
    uncommitted changes in the `_integration` worktrees. After this wind-down a short, oracle-only review of the
    integration branches follows (no fix-ups, no new tasks), so the branches must be ready to read.
-7. Then **stop**. Do not use `git stash` or network git. Do not push, open PRs, or touch the issue tracker.
+7. Do not append a phase-done TaskEvent: the phase is not finished. Parked tasks are open work for a resume.
+8. Then **stop**. Do not use `git stash` or network git. Do not push, open PRs, or touch the issue tracker.

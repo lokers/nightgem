@@ -100,14 +100,32 @@ export const REVIEW_LITE_PROMPT = 'phase-review-lite';
 export type SoftReason = 'budget-soft' | 'wallclock-soft';
 export const FINAL_REVIEW_FILE = 'FINAL_REVIEW.md';
 export const RUN_COMPLETE_FILE = 'run-complete.json';
+/** `blockedReason` prefix the wind-down puts on the tasks it parks; a resumed build re-opens them. */
+export const WIND_DOWN_TAG = 'wind-down:';
 /**
  * Written by the orchestrator, in the control dir (agent-unwritable), when a review-lite starts. The lite review writes the
  * same `phase:review` event, `run-complete.json` and `FINAL_REVIEW.md` as the full review, so this is what tells a resume
  * that the review in those files was only the short wind-down one.
  */
-/** `blockedReason` prefix the wind-down puts on the tasks it parks; a resumed build re-opens them. */
-export const WIND_DOWN_TAG = 'wind-down:';
 export const REVIEW_LITE_MARKER_FILE = 'review-lite.json';
+/**
+ * Ids of the tasks that an earlier attempt's wind-down parked and nothing since has changed: the task's LATEST event is
+ * before `offset` and is `blocked` or `skipped` with a `blockedReason` starting with `wind-down:`. Phase, integration and
+ * wind-down lines are not tasks. Shared by the resume start, `phaseDone('build')` and `nextTask`, so a build can never count
+ * as finished while a parked task is untouched.
+ */
+export function windDownParked(events: readonly TaskEvent[], offset: number): string[] {
+  const latest = new Map<string, number>();
+  events.forEach((t, idx) => latest.set(t.id, idx));
+  const ids: string[] = [];
+  for (const [id, idx] of latest) {
+    const t = events[idx]!;
+    if (/^(phase|integration|wind-down):/.test(id)) continue;
+    if (idx < offset && ['blocked', 'skipped'].includes(t.state) && t.blockedReason?.startsWith(WIND_DOWN_TAG) === true) ids.push(id);
+  }
+  return ids;
+}
+
 export const APPEND_AGENTS = ['orchestrator', 'fixer', 'designer', 'oracle'] as const;
 /** Agents that must be registered before the preflight (slim registers them 2-15 s after start). */
 export const REQUIRED_AGENTS = ['orchestrator', 'fixer', 'oracle'] as const;
@@ -153,6 +171,8 @@ export interface StateOps {
   /** Like `readTasks`, plus the number of lines that could not be parsed (a torn last line after a crash). */
   readTasksChecked(path: string): { items: TaskEvent[]; malformed: number };
   exists(path: string): boolean;
+  /** Move a file (the review markers of an earlier attempt are renamed with an attempt suffix). */
+  rename(from: string, to: string): void;
 }
 
 export const realStateOps: StateOps = {
@@ -166,6 +186,7 @@ export const realStateOps: StateOps = {
   readTasks: (path) => readJsonl(path, TaskEvent).items,
   readTasksChecked: (path) => readJsonl(path, TaskEvent),
   exists: (path) => existsSync(path),
+  rename: (from, to) => renameSync(from, to),
 };
 
 export interface SignalSource {
@@ -642,7 +663,9 @@ class Run {
     const done = (phase: Phase): boolean => {
       if (phase === 'report') return false;
       if (!read.items.some((t) => t.id === `phase:${phase}` && t.state === 'done')) return false;
-      return phase !== 'review' || this.fullReviewMarkersPresent(prev);
+      // the wind-down parks every unfinished task, which can make "no task is open" true: a parked task means build is not done
+      if (phase === 'build' && windDownParked(read.items, this.taskOffset).length > 0) return false;
+      return phase !== 'review' || this.fullReviewMarkersPresent(prev, manifest);
     };
     const first = PHASE_ORDER.findIndex((p) => !done(p));
     this.startIdx = first < 0 ? PHASE_ORDER.length - 1 : first;
@@ -660,8 +683,10 @@ class Run {
   }
 
   /** `run-complete.json` holds a valid RunComplete, `FINAL_REVIEW.md` exists, and neither comes from a review-lite. */
-  private fullReviewMarkersPresent(prev: { stopReason?: string } | undefined): boolean {
+  private fullReviewMarkersPresent(prev: { stopReason?: string } | undefined, manifest: RunManifest): boolean {
     if (!this.finalReviewExists() || !this.validRunComplete()) return false;
+    // the marker could not be written, so a review-lite may have left these files without it
+    if (manifest.defects.some((d) => d.kind === 'review-lite-marker-failed')) return false;
     if (this.st.exists(join(this.d.paths.controlDir, REVIEW_LITE_MARKER_FILE))) return false;
     // a v1 run, or one whose attempt wound down: the review in the files can only be the lite one
     return prev?.stopReason !== 'budget-soft' && prev?.stopReason !== 'wallclock-soft';
@@ -697,7 +722,7 @@ class Run {
       const stem = join(dirname(file), basename(file, ext));
       let target = `${stem}-attempt${n}${ext}`;
       for (let k = 1; this.st.exists(target); k++) target = `${stem}-attempt${n}-${k}${ext}`;
-      renameSync(file, target);
+      this.st.rename(file, target);
       this.log('marker.renamed', { from: file, to: target });
     }
   }
@@ -1065,18 +1090,23 @@ class Run {
 
   /** Only events written by this attempt count (the earlier ones are ignored, see {@link planResume}). */
   private phaseDone(phase: Phase): boolean {
-    if (this.tasks().slice(this.taskOffset).some((t) => t.id === `phase:${phase}` && t.state === 'done')) return true;
+    const events = this.tasks();
+    if (events.slice(this.taskOffset).some((t) => t.id === `phase:${phase}` && t.state === 'done')) {
+      // a build agent that writes phase:build while a wind-down-parked task is untouched has not finished: nudge, never complete
+      return phase !== 'build' || windDownParked(events, this.taskOffset).length === 0;
+    }
     return phase === 'review' && this.runCompleteSeen() && this.finalReviewExists();
   }
 
   private nextTask(): string {
-    const latest = new Map<string, { t: TaskEvent; idx: number }>();
-    this.tasks().forEach((t, idx) => latest.set(t.id, { t, idx }));
-    for (const { t, idx } of latest.values()) {
+    const events = this.tasks();
+    // AD9: a task the wind-down of an earlier attempt parked is open work again (same rule as prompts/phase-build.md)
+    const parked = new Set(windDownParked(events, this.taskOffset));
+    const latest = new Map<string, TaskEvent>();
+    for (const t of events) latest.set(t.id, t);
+    for (const t of latest.values()) {
       if (/^(phase|integration|wind-down):/.test(t.id)) continue;
-      // AD9: a task the wind-down of an earlier attempt parked is open work again (same rule as prompts/phase-build.md)
-      const parked = idx < this.taskOffset && ['blocked', 'skipped'].includes(t.state) && t.blockedReason?.startsWith(WIND_DOWN_TAG) === true;
-      if (parked || ['todo', 'running', 'verifying', 'fixing'].includes(t.state)) return t.id;
+      if (parked.has(t.id) || ['todo', 'running', 'verifying', 'fixing'].includes(t.state)) return t.id;
     }
     return 'the remaining work of this phase (check the board)';
   }

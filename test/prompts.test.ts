@@ -438,6 +438,7 @@ describe('phase prompts', () => {
     expect(out).toContain('`blockedReason`');
     expect(out).toMatch(/must start with `wind-down:`/);
     expect(out).toMatch(/skipped. tasks\s+too/);
+    expect(out).toContain('Do not append a phase-done TaskEvent: the phase is not finished.');
   });
 });
 
@@ -454,6 +455,8 @@ describe('resume notes (AD8, AD9)', () => {
     expect(out).toMatch(/Never recreate, reset or delete an existing\s+worktree or branch/);
     expect(out).toMatch(/Never redo a `done` task/);
     expect(out).toMatch(/never redo finished work/);
+    expect(out).toMatch(/Do not append the `phase:build` done event while a\s+parked task has no newer event/);
+    expect(out).not.toContain('skippedReason');
   });
 
   it('the review prompts say to ignore the renamed markers of earlier attempts', () => {
