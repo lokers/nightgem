@@ -722,6 +722,8 @@ describe('budget: soft', () => {
     expect(h.server.interrupts).toEqual([]); // nothing was busy below the roots
     expect(existsSync(join(h.paths.specsDir, 'FINAL_REVIEW.md'))).toBe(true);
     expect(h.manifest().defects.map((d) => d.kind)).toEqual([]);
+    // the orchestrator records that the review in the files is the lite one (a resume must not take it for the full review)
+    expect(JSON.parse(readFileSync(join(h.paths.controlDir, 'review-lite.json'), 'utf8'))).toMatchObject({ attempt: 1 });
   });
 
   it('waits for idle (no busy child), then review-lite, then the report phase', async () => {
@@ -1425,9 +1427,30 @@ const OLD = { n: 1, startedAt: '2026-01-01T00:00:00.000Z', endedAt: '2026-01-01T
 const OPEN = { n: 2, startedAt: '2026-01-02T00:00:00.000Z', budgetUsd: 10, costAtStartUsd: 4 } as const;
 const CostLineOf = (l: Record<string, unknown>) => ({ ...l }) as never;
 
-/** A resumed run: attempt 1 spent $4 in one (old) plan root, recorded in cost.jsonl; attempt 2 has a $10 budget. */
-function resumed(o: Opts = {}): { h: Harness; oldRoot: string } {
+/** One `tasks.jsonl` line, as an agent would write it. */
+const taskLine = (id: string, state: string, phase: Phase, extra: Record<string, unknown> = {}): string =>
+  `${JSON.stringify({ ts: '2026-01-01T00:40:00.000Z', id, repo: '_run', branch: '-', worktree: '/Users/alice/work/.specs/demo-run', state, attempt: 0, verify: [], phase, ...extra })}\n`;
+const seedTasks = (h: Harness, ...lines: string[]): void => {
+  mkdirSync(dirname(h.paths.tasksJsonl), { recursive: true });
+  writeFileSync(h.paths.tasksJsonl, lines.join(''));
+};
+const runComplete = (h: Harness): string => join(h.paths.runDir, 'run-complete.json');
+const finalReview = (h: Harness): string => join(h.paths.specsDir, 'FINAL_REVIEW.md');
+const liteMarker = (h: Harness): string => join(h.paths.controlDir, 'review-lite.json');
+/** The files a review leaves behind (the full one, or the lite one with `lite`). */
+const seedReviewMarkers = (h: Harness, lite = false): void => {
+  writeFileSync(runComplete(h), `${JSON.stringify({ type: 'run.complete', ts: '2026-01-01T00:50:00.000Z', summary: 'old', finalReviewPath: finalReview(h) })}\n`);
+  writeFileSync(finalReview(h), '# Final review (attempt 1)\n');
+  if (lite) writeFileSync(liteMarker(h), `${JSON.stringify({ attempt: 1, ts: '2026-01-01T00:50:00.000Z' })}\n`);
+};
+
+/**
+ * A resumed run: attempt 1 spent $4 in one (old) plan root, recorded in cost.jsonl, and finished the plan phase
+ * (`phase:plan` done in tasks.jsonl); attempt 2 has a $10 budget. Pass `tasks` to seed a different tasks.jsonl.
+ */
+function resumed(o: Opts = {}, tasks: string[] = [taskLine('phase:plan', 'done', 'plan')]): { h: Harness; oldRoot: string } {
   const h = makeHarness(o);
+  seedTasks(h, ...tasks);
   const oldRoot = h.server.seedSession(4);
   const line = { ts: '2026-01-01T00:30:00.000Z', sessionId: oldRoot, parentId: null, phase: 'plan', costUsd: 4, estimated: false, source: 'session-info', totalUsd: 4 };
   mkdirSync(dirname(h.paths.costJsonl), { recursive: true });
@@ -1739,13 +1762,13 @@ describe('attempt lifecycle: attempt 2', () => {
     });
     const res = await h.run();
     expect(res.state).toBe('completed');
-    expect(live!.costUsd).toBeCloseTo(7.5, 8); // 4 (attempt 1) + 0.5 plan + 3 build
-    expect(live!.attempts![1]!.costUsd).toBeCloseTo(3.5, 8);
+    expect(live!.costUsd).toBeCloseTo(7, 8); // 4 (attempt 1, incl. the plan) + 3 build
+    expect(live!.attempts![1]!.costUsd).toBeCloseTo(3, 8);
     expect(live!.attempts![1]!.endedAt).toBeUndefined();
     expect(live!.attempts![0]).toEqual(OLD);
     const m = h.manifest();
-    expect(m.costUsd).toBeCloseTo(8.5, 8); // 4 + plan .5 + build 3 + review .5 + report .5
-    expect(m.attempts![1]!.costUsd).toBeCloseTo(4.5, 8);
+    expect(m.costUsd).toBeCloseTo(8, 8); // 4 + build 3 + review .5 + report .5 (the plan is done: not run again)
+    expect(m.attempts![1]!.costUsd).toBeCloseTo(4, 8);
   });
 
   it('the wind-down prompt shows the ATTEMPT spend and the attempt budget; the soft log carries both figures', async () => {
@@ -1753,7 +1776,7 @@ describe('attempt lifecycle: attempt 2', () => {
       script: (rec, srv, hh) => {
         if (rec.kind === 'phase-build') {
           srv.setBusy(rec.sessionId, true);
-          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 8.5), 20_000);
+          hh.clock.setTimeout(() => srv.addCost(rec.sessionId, 9), 20_000);
         } else if (rec.kind === 'wind-down') hh.clock.setTimeout(() => srv.setBusy(rec.sessionId, false), 5_000);
         else autoPhases(rec, srv);
       },
@@ -1761,7 +1784,7 @@ describe('attempt lifecycle: attempt 2', () => {
     const res = await h.run();
     expect(res).toMatchObject({ state: 'aborted-budget', stopReason: 'budget-soft' });
     const wd = h.server.prompts.find((p) => p.kind === 'wind-down')!;
-    expect(wd.text).toContain('spent $9.00 of $10.00'); // 0.5 + 8.5 this attempt, not the $13.00 cumulative
+    expect(wd.text).toContain('spent $9.00 of $10.00'); // this attempt, not the $13.00 cumulative
     expect(wd.text).not.toContain('$13.00');
     expect(h.logs.find((l) => l.event === 'budget.soft')?.fields).toMatchObject({ attemptSpendUsd: 9, cumulativeUsd: 13, budgetUsd: 10 });
 
@@ -1778,10 +1801,10 @@ describe('attempt lifecycle: attempt 2', () => {
     const m = h.manifest();
     const plans = m.rootSessions.filter((r) => r.phase === 'plan');
     expect(plans.map((r) => r.sessionId)[0]).toBe(oldRoot);
-    expect(plans).toHaveLength(2);
-    for (const r of plans) expect(r.costUsd).toBeCloseTo(4.5, 8); // 4 (attempt 1) + 0.5 (attempt 2)
+    expect(plans).toHaveLength(1); // the plan was done in attempt 1: not planned again
+    for (const r of plans) expect(r.costUsd).toBeCloseTo(4, 8); // attempt 1 only
     expect(m.rootSessions.find((r) => r.phase === 'build')!.costUsd).toBeCloseTo(0.5, 8);
-    expect(m.attempts![1]!.costUsd).toBeCloseTo(2, 8);
+    expect(m.attempts![1]!.costUsd).toBeCloseTo(1.5, 8); // build, review, report
   });
 
   it('seeds phaseBySession from rootSessions: a child of an old build root keeps the build phase in cost.jsonl', async () => {
@@ -1854,5 +1877,262 @@ describe('attempt lifecycle: a failed start never lowers the recorded figures', 
     expect(m.rootSessions[0]!.costUsd).toBe(4);
     expect(m.attempts![0]).toEqual(OLD);
     expect(m.attempts![1]).toMatchObject({ n: 2, state: 'failed', stopReason: 'server-start-failed', costUsd: 0, costAtStartUsd: 4 });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Resume: phases, markers and parked tasks (T9b)
+// ---------------------------------------------------------------------------------------------------------------
+
+describe('resume: a fresh run is unchanged', () => {
+  it('runs all four phases, renames nothing and writes no review-lite marker', async () => {
+    const h = makeHarness();
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-plan', 'phase-build', 'phase-review', 'phase-report']);
+    expect(h.logs.find((l) => l.event === 'resume.plan')?.fields).toMatchObject({ offset: 0, startPhase: 'plan', skipped: [] });
+    expect(h.logs.some((l) => l.event === 'phase.skipped')).toBe(false);
+    expect(h.logs.some((l) => l.event === 'marker.renamed')).toBe(false);
+    expect(readdirSync(h.paths.runDir).filter((f) => f.includes('-attempt'))).toEqual([]);
+    expect(readdirSync(h.paths.specsDir).filter((f) => f.includes('-attempt'))).toEqual([]);
+    expect(existsSync(runComplete(h))).toBe(true);
+    expect(existsSync(liteMarker(h))).toBe(false);
+  });
+});
+
+describe('resume: phases (AD8)', () => {
+  const planDone = taskLine('phase:plan', 'done', 'plan');
+  const buildDone = taskLine('phase:build', 'done', 'build');
+  const reviewDone = taskLine('phase:review', 'done', 'review');
+  const reportDone = taskLine('phase:report', 'done', 'report');
+
+  it('a plan finished in attempt 1 is skipped: exactly one plan root session over both attempts, and the run still ends completed', async () => {
+    const { h, oldRoot } = resumed();
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'completed', exitCode: 0 });
+    expect(kinds(h)).toEqual(['phase-build', 'phase-review', 'phase-report']);
+    expect(h.server.created.map((c) => c.input.title)).toEqual(['demo-run build', 'demo-run review', 'demo-run report']);
+    expect(h.manifest().rootSessions.filter((r) => r.phase === 'plan').map((r) => r.sessionId)).toEqual([oldRoot]);
+    expect(h.logs.find((l) => l.event === 'resume.plan')?.fields).toMatchObject({ offset: 1, startPhase: 'build', skipped: ['plan'] });
+    expect(h.logs.find((l) => l.event === 'phase.skipped')?.fields).toMatchObject({ phase: 'plan', reason: 'done-in-earlier-attempt' });
+    expect(lastAttempt(h)).toMatchObject({ n: 2, state: 'completed' });
+  });
+
+  it('with the plan, build and review done, only the report runs and the run ends completed', async () => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seedReviewMarkers(h);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-report']);
+  });
+
+  it('a build that was not finished is continued: only the unfinished phases get a root, and the earlier plan is not prompted again', async () => {
+    const { h } = resumed({}, [planDone, taskLine('api', 'done', 'build'), taskLine('ui', 'running', 'build')]);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-build', 'phase-review', 'phase-report']);
+    for (const p of h.server.prompts) expect(p.text).not.toMatch(/\bapi\b/); // the finished task is not asked for again
+  });
+
+  it('review genuinely done in attempt 1 (stopped during the report): only the report runs and the markers stay in place', async () => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seedReviewMarkers(h);
+    const before = [readFileSync(runComplete(h), 'utf8'), readFileSync(finalReview(h), 'utf8')];
+    await h.run();
+    expect(kinds(h)).toEqual(['phase-report']);
+    expect(h.logs.some((l) => l.event === 'marker.renamed')).toBe(false);
+    expect([readFileSync(runComplete(h), 'utf8'), readFileSync(finalReview(h), 'utf8')]).toEqual(before);
+    expect(readdirSync(h.paths.runDir).filter((f) => f.includes('-attempt'))).toEqual([]);
+    expect(readdirSync(h.paths.specsDir).filter((f) => f.includes('-attempt'))).toEqual([]);
+  });
+
+  it('a wound-down attempt 1 (review-lite wrote phase:review and run-complete.json): build, the FULL review, then the report; the old markers are renamed', async () => {
+    const { h } = resumed({}, [planDone, taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }), reviewDone]);
+    seedReviewMarkers(h, true);
+    const old = [readFileSync(runComplete(h), 'utf8'), readFileSync(finalReview(h), 'utf8'), readFileSync(liteMarker(h), 'utf8')];
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-build', 'phase-review', 'phase-report']);
+    // the earlier files kept their content under the attempt suffix; the new review wrote fresh ones
+    expect(readFileSync(join(h.paths.runDir, 'run-complete-attempt1.json'), 'utf8')).toBe(old[0]);
+    expect(readFileSync(join(h.paths.specsDir, 'FINAL_REVIEW-attempt1.md'), 'utf8')).toBe(old[1]);
+    expect(readFileSync(join(h.paths.controlDir, 'review-lite-attempt1.json'), 'utf8')).toBe(old[2]);
+    expect(existsSync(liteMarker(h))).toBe(false);
+    expect(readFileSync(finalReview(h), 'utf8')).not.toBe(old[1]);
+    expect(readFileSync(runComplete(h), 'utf8')).toContain('"summary":"done"');
+    expect(h.logs.filter((l) => l.event === 'marker.renamed')).toHaveLength(3);
+    // the old events do not end the new phases early: the build lasts its full 30 s script
+    const at = (k: string): number => h.server.prompts.find((p) => p.kind === k)!.at;
+    expect(at('phase-review') - at('phase-build')).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('the old markers are renamed with the number of the previous attempt, and an earlier rename is never overwritten', async () => {
+    const { h } = resumed({}, [planDone, reviewDone]);
+    seedReviewMarkers(h, true);
+    writeFileSync(join(h.paths.runDir, 'run-complete-attempt1.json'), 'older\n');
+    await h.run();
+    expect(readFileSync(join(h.paths.runDir, 'run-complete-attempt1.json'), 'utf8')).toBe('older\n');
+    expect(readFileSync(join(h.paths.runDir, 'run-complete-attempt1-1.json'), 'utf8')).toContain('"summary":"old"');
+  });
+
+  it.each([
+    ['the markers carry the review-lite marker', (h: Harness) => seedReviewMarkers(h, true)],
+    ['run-complete.json is not a valid RunComplete', (h: Harness) => {
+      seedReviewMarkers(h);
+      writeFileSync(runComplete(h), '{"type":"run.complete"}\n');
+    }],
+    ['FINAL_REVIEW.md is missing', (h: Harness) => {
+      seedReviewMarkers(h);
+      rmSync(finalReview(h));
+    }],
+    ['run-complete.json is missing', (h: Harness) => {
+      seedReviewMarkers(h);
+      rmSync(runComplete(h));
+    }],
+  ])('phase:review done is not enough when %s: the review runs again', async (_why, seed) => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seed(h);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
+  });
+
+  it('an attempt that ended in a soft wind-down (a v1 run has no review-lite marker) does not count its review as done', async () => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seedReviewMarkers(h);
+    writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), attempts: [{ ...OLD, stopReason: 'budget-soft' }, OPEN] }));
+    await h.run();
+    expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
+    expect(existsSync(join(h.paths.runDir, 'run-complete-attempt1.json'))).toBe(true);
+  });
+
+  it('a phase:report done before the offset is ignored: the report runs and only a done line written after the offset ends it', async () => {
+    const { h } = resumed(
+      {
+        script: (rec, srv, hh) => {
+          if (rec.kind === 'phase-report') {
+            srv.setBusy(rec.sessionId, true);
+            hh.clock.setTimeout(() => {
+              srv.markPhaseDone('report');
+              srv.setBusy(rec.sessionId, false);
+            }, 300_000);
+          } else autoPhases(rec, srv);
+        },
+      },
+      [planDone, buildDone, reviewDone, reportDone],
+    );
+    seedReviewMarkers(h);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-report']);
+    const report = h.server.prompts.find((p) => p.kind === 'phase-report')!;
+    expect(h.clock.now() - report.at).toBeGreaterThanOrEqual(300_000); // the stale line did not end it at once
+    expect(h.logs.find((l) => l.event === 'resume.plan')?.fields).toMatchObject({ offset: 4, startPhase: 'report' });
+  });
+
+  it('a later phase done before the offset does not count when an earlier one has to run again', async () => {
+    const { h } = resumed({}, [buildDone]); // no phase:plan: plan runs, then every later phase runs and finishes by its own new line
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-plan', 'phase-build', 'phase-review', 'phase-report']);
+    const at = (k: string): number => h.server.prompts.find((p) => p.kind === k)!.at;
+    expect(at('phase-build') - at('phase-plan')).toBeGreaterThanOrEqual(30_000);
+  });
+
+  it('a broken last line in tasks.jsonl is ignored with a warning, the next event still lands on its own line, and the run completes', async () => {
+    const { h } = resumed({}, [planDone]);
+    writeFileSync(h.paths.tasksJsonl, `${planDone}{"ts":"2026-01-01T00:41:00.000Z","id":"ap`); // torn write, no newline
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(kinds(h)).toEqual(['phase-build', 'phase-review', 'phase-report']);
+    expect(h.logs.find((l) => l.event === 'tasks.malformed')?.fields).toMatchObject({ lines: 1 });
+    const lines = readFileSync(h.paths.tasksJsonl, 'utf8').trim().split('\n');
+    expect(lines).toHaveLength(5); // plan, torn line, build, review, report
+    expect(lines.slice(2).every((l) => (JSON.parse(l) as { state: string }).state === 'done')).toBe(true);
+  });
+
+  it('an unreadable tasks.jsonl fails the start instead of planning again on top of finished work', async () => {
+    const { h } = resumed();
+    h.deps.state = {
+      ...h.deps.state,
+      readTasksChecked: () => {
+        throw new Error('EACCES');
+      },
+    };
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'tasks-unreadable' });
+    expect(h.server.prompts).toHaveLength(0);
+  });
+
+  it('a failed start assertion renames nothing', async () => {
+    const { h } = resumed({}, [planDone, reviewDone]);
+    seedReviewMarkers(h, true);
+    writeControlFlags(h.paths.controlDir, { hardStop: true });
+    const res = await h.run();
+    expect(res.stopReason).toBe('attempt-invariant');
+    expect(existsSync(runComplete(h))).toBe(true);
+    expect(existsSync(finalReview(h))).toBe(true);
+    expect(existsSync(liteMarker(h))).toBe(true);
+    expect(readdirSync(h.paths.runDir).filter((f) => f.includes('-attempt'))).toEqual([]);
+  });
+});
+
+describe('resume: parked tasks (AD9)', () => {
+  const stalledBuild = (nudgeTexts: string[]) => (rec: PromptRecord, srv: FakeServer): void => {
+    if (rec.kind === 'phase-build') return; // the build root ignores its prompt and idles
+    if (rec.kind === 'nudge') {
+      nudgeTexts.push(rec.text);
+      srv.completePhase(rec.sessionId, 'build', { afterMs: 10_000, costUsd: 0.5 });
+    } else autoPhases(rec, srv);
+  };
+
+  it('the nudge of a resumed build names a task the wind-down parked, not a done one nor one blocked for a real reason', async () => {
+    const texts: string[] = [];
+    const { h } = resumed({ script: stalledBuild(texts) }, [
+      taskLine('phase:plan', 'done', 'plan'),
+      taskLine('api', 'done', 'build', { repo: 'acme-api', branch: 'feat/api', worktree: '/Users/alice/work/acme-api/.worktrees/demo-run/api' }),
+      taskLine('infra', 'blocked', 'build', { blockedReason: 'needs credentials' }),
+      taskLine('docs', 'blocked', 'build', { blockedReason: 'wind-down: unfinished at soft stop' }),
+    ]);
+    const res = await h.run();
+    expect(res.state).toBe('completed');
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('**docs**');
+    expect(texts[0]).not.toContain('**api**');
+    expect(texts[0]).not.toContain('**infra**');
+  });
+
+  it('a task skipped by the wind-down is re-opened too, but a wind-down tag written in THIS attempt is not', async () => {
+    const texts: string[] = [];
+    const { h } = resumed(
+      {
+        script: (rec, srv) => {
+          if (rec.kind === 'phase-build') {
+            // this attempt parks "later" again: it must not be handed back as pending work
+            srv.appendTask({ id: 'later', state: 'blocked', phase: 'build', blockedReason: 'wind-down: parked again' });
+            return;
+          }
+          stalledBuild(texts)(rec, srv);
+        },
+      },
+      [
+        taskLine('phase:plan', 'done', 'plan'),
+        taskLine('later', 'todo', 'build'),
+        taskLine('ui', 'skipped', 'build', { blockedReason: 'wind-down: never started' }),
+      ],
+    );
+    await h.run();
+    expect(texts[0]).toContain('**ui**');
+    expect(texts[0]).not.toContain('**later**');
+  });
+
+  it('a nudge with no task left says so (a task blocked for another reason is not pending work)', async () => {
+    const texts: string[] = [];
+    const { h } = resumed({ script: stalledBuild(texts) }, [
+      taskLine('phase:plan', 'done', 'plan'),
+      taskLine('infra', 'skipped', 'build', { blockedReason: 'depends on a blocked task' }),
+    ]);
+    await h.run();
+    expect(texts[0]).toContain('the remaining work of this phase');
   });
 });
