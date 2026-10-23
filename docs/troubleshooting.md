@@ -42,17 +42,40 @@ Before the first phase the orchestrator runs the rule check and a three-layer ca
 
 `NIGHTGEM_SKIP_LLM_CANARY=1` skips layer 3 only. `NIGHTGEM_SKIP_CANARY=1` skips all three and `NIGHTGEM_SANDBOX=0` skips the kernel-level probes; both exist for tests only. Do not use them for a real run.
 
+## Resume refusals
+
+`resume <slug> --budget <usd>` checks everything before it writes anything, so a refusal changes nothing. When a run has just ended, `resume` also waits up to about 5 s for the previous orchestrator's delayed launchd cleanup before it starts the job. See [Resume](how-it-works.md#resume).
+
+| Message | Fix |
+|---|---|
+| "is completed; there is nothing to resume" | A finished run cannot be resumed. Launch a new slug. |
+| "is still active" | Check it with `status`. If it is really running, wait or `stop <slug>`; `resume` only takes over a run that has ended. |
+| "The last attempt (n) ... is still open" | The orchestrator crashed before it could close its attempt. Run `stop <slug>` first (it closes the attempt as `stopped-after-crash`), then `resume`. |
+| "worktree(s) of started tasks ... missing or not usable" | A worktree or branch of a task that had started is gone, moved, outside the run's worktree root or on another branch (the message lists each path). `skipped` tasks never started, so they are not checked; `blocked` ones are. `resume` never rebuilds a worktree silently. Restore it with `git worktree add <path> <branch>`, or launch a new slug. |
+| "The launchd job ... is running although RUN.json says the run is ..." | The job is alive although `RUN.json` says the run ended. If the run just finished, wait a few seconds and retry. Otherwise check `status`, then `stop <slug>`. |
+| "The launchd job ... is loaded again / running again after the previous run ended" | The previous orchestrator's delayed cleanup had not finished. Try again in a few seconds. |
+| "The stale launchd job ... is still loaded after bootout" | A leftover job that is not running did not go away after `launchctl bootout`. Run the `launchctl bootout gui/<uid>/<label>` command the message prints, then retry. |
+| "Cannot tell whether the launchd job ... is loaded (...)" | `launchctl print` failed in a way other than "service not found" (no `launchctl`, a permission or domain error). nightgem will not guess, so `resume` refuses, and `stop` ("... is running") and `launch` ("... is already loaded") refuse the same way. Fix what `launchctl` reports, then retry. |
+| "Another process (pid n) holds the run lock" | One run at a time. Check `status` of that run, and wait for it or `stop` it. A dead holder is taken over. |
+| "The run lock file is being written by another process, or is unreadable and younger than 5 s" | Retry in a few seconds; an unreadable lock older than that is taken over. |
+| `stop`: "A launch or resume of ... is in progress" | A live process holds this run's lock because a `launch` or `resume` is still starting it. `stop` will not mark the run stopped under it. Wait a few seconds and run `stop` again. |
+| "failed before it ever started" | Nothing to continue. `launch` the slug again. |
+| "frozen run context cannot be read" | `run-context.json` in the control dir is missing or invalid, so the run cannot continue under its original rules. Launch a new slug. |
+| "Invalid budget" | `--budget` is required and must be a number above 0. |
+
+A resumed run that ends at once as `failed` with the stop reason `attempt-invariant` (and a defect of that name in `RUN.json`) did not start from a clean state: the new attempt was already closed, its budget did not match `RUN.json`, or a stop flag from an earlier process was still set in `control.json` (for example a crash during a stop). The run touched nothing. Run `resume <slug> --budget <usd>` again, which resets the flags; if it repeats, read `orchestrator.log` (`attempt.invariant_failed`) and the defect message.
+
 ## Lock handoff
 
 `launch` takes the lock and exits right after `launchctl bootstrap`; the orchestrator waits up to 60 s for the CLI to let go. A lock held by a different live run is refused at once.
 
 ## Stale lock
 
-The lock records a PID. If the PID is gone, the next `launch` or `doctor` treats the lock as stale and takes it over. If a run is stuck in `launching` or `running` with a dead job, check `launchctl print gui/$(id -u)/<label>` (the label is in `RUN.json`), run `stop <slug>` to mark it `stopped`, then `report <slug>`.
+The lock records a PID. If the PID is gone, the next `launch` or `doctor` treats the lock as stale and takes it over. If a run is stuck in `launching` or `running` with a dead job, check `launchctl print gui/$(id -u)/<label>` (the label is in `RUN.json`), run `stop <slug>` to mark it `stopped` (this also closes its attempt, so the run can be resumed), then `report <slug>`.
 
 ## A stalled run
 
-`status` shows an old heartbeat or no cost movement. Read `orchestrator.log` first, then `events.jsonl`. States `stalled` and `failed` already have a report. Common causes: repeated 429/5xx from the provider (the watchdog backs off up to 45 minutes), a hung shell that the 20-minute rule has not yet aborted, or the Mac sleeping on battery. `stop <slug>` is always safe and still writes the report.
+`status` shows an old heartbeat or no cost movement. Read `orchestrator.log` first, then `events.jsonl`. States `stalled` and `failed` already have a report. Common causes: repeated 429/5xx from the provider (the watchdog backs off up to 45 minutes), a hung shell that the 20-minute rule has not yet aborted, or the Mac sleeping on battery. `stop <slug>` is always safe and still writes the report. A `stalled` or `failed` run can then be continued with [`resume`](#resume-refusals).
 
 ## Reading the logs
 

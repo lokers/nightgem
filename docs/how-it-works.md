@@ -2,7 +2,7 @@
 
 [← README](../README.md) · [How it works](how-it-works.md) · [Profile](profile.md) · [Safety model](safety-model.md) · [Troubleshooting](troubleshooting.md) · [OpenCode notes](opencode-notes.md)
 
-The [README](../README.md#how-it-works) has the short version (the gem-factory night shift). This page has the lifecycle, the budget accounting, the artifacts, the OpenCode.app notes and a checklist for your first real run.
+The [README](../README.md#how-it-works) has the short version (the gem-factory night shift). This page has the lifecycle, the budget accounting, resuming a run, the artifacts, the OpenCode.app notes and a checklist for your first real run.
 
 ## Lifecycle
 
@@ -28,7 +28,7 @@ The [README](../README.md#how-it-works) has the short version (the gem-factory n
 - Failure policy: up to 3 fix-up attempts per task, @oracle is consulted after the 2nd, then the task is BLOCKED and its dependents are skipped. Independent lanes continue.
 - Risky changes the spec does not mention (new dependency, migration, API contract change) need @oracle approval. Each is logged in `DECISIONS.md` and listed under "Needs human attention".
 - A watchdog nudges an idle root session (at most 10 times), aborts sessions that are silent for 20 minutes, backs off on 429/5xx, and ends the run after a 10 h wall clock.
-- Run states: `launching`, `running`, `winding-down`, `stopping`, then one of `completed`, `failed`, `stalled`, `aborted-budget`, `stopped`. A terminal run is never acted on again, so a restart does nothing.
+- Run states: `launching`, `running`, `winding-down`, `stopping`, then one of `completed`, `failed`, `stalled`, `aborted-budget`, `stopped`. A terminal run is never acted on again, so a restart of the job does nothing; only [`resume`](#resume) continues it.
 - The run ends with the lock released, the server process group killed and the launchd job (`dev.nightgem.<slug>`) removed.
 
 ### What `SPEC.md` needs
@@ -51,8 +51,37 @@ The spec should also have an `## Autonomy notes` section: what agents may decide
 - Totals are reconciled by polling every 30–60 s and before each threshold decision. The server event stream is only used for speed.
 - If OpenCode reports no cost but tokens are present, the cost is estimated from a pinned price table (unknown models are priced as the most expensive default) and marked `estimated` in `cost.jsonl`.
 - **Overshoot is bounded, not zero.** At the hard stop the orchestrator interrupts every running descendant, interrupts the root again (a finishing child wakes its parent), re-polls for 30 s, then kills the server process group. The tolerated overshoot is roughly one in-flight step per busy session, and an aborted stream can be billed without ever being recorded. The report states this caveat.
+- **The budget is per attempt.** A run is one or more attempts (the first launch, then each [`resume`](#resume)). The 85% and 100% stops compare an attempt's own spend with that attempt's budget; the run's cumulative cost is reported next to it.
 - **The figure is an estimate.** It depends on OpenCode's pricing table for the configured provider and models. Compare with `opencode stats` on the run database when in doubt.
 - **`webfetch` calls with a `prompt` are not recorded.** The secondary model call behind them does not create a session, so its spend is invisible. The guard strips the prompt (or denies the call) to keep this from happening, and `warming` is kept off.
+
+## Resume
+
+A run that ended before it finished can continue instead of starting over:
+
+```
+nightgem resume <slug> --budget <usd>
+```
+
+**When you can resume.** The run must be `stopped`, `aborted-budget`, `failed` or `stalled`. A `completed` run is never resumed (launch a new slug), and an active run is refused until it ends.
+
+**After a crash.** If the orchestrator died without finishing (the job is gone but `RUN.json` still says `running`), its last attempt is still open and `resume` refuses it. Run `nightgem stop <slug>` first: with the job not running, `stop` closes the attempt as `stopped` (reason `stopped-after-crash`), releases a dead lock and writes the report. Then `resume`.
+
+**What it does.**
+
+- **`--budget` is required and is extra money.** It is the budget of the new attempt, on top of what the earlier attempts spent. The 85% and 100% stops apply to *this attempt's* spend, not to the run total. `RUN.json` keeps one entry per attempt in `attempts` (start, end, state, stop reason, budget, attempt spend).
+- **The run continues from the first unfinished phase** and runs every later phase, always ending with the report. A phase an earlier attempt finished is skipped. The review counts as finished only if it produced `run-complete.json`; the `phase-review-lite` after a wind-down does not count.
+- **Tasks parked by a wind-down are re-opened.** The wind-down tags them (`blockedReason` starting with `wind-down:`), and the build phase treats them as `todo` again. Tasks that are blocked for real reasons (a rejected decision, failed fix-ups) stay blocked.
+- **Worktrees and branches are reused, never reset.** Before anything is written, `resume` checks that the worktree and branch of every task that had started still exist and are inside the run's worktree root. A missing one is refused with the path; nothing is rebuilt silently. Tasks that never started (`skipped`) are not checked; `blocked` ones are.
+- **The frozen run context is reused.** The profile snapshot, skills, instructions and repos from the first attempt govern the whole run, so it continues under the rules it was planned with. `doctor`, the rule preflight and the canary still run against the live environment.
+- **Old review files are renamed with an attempt suffix** before a review runs again: `FINAL_REVIEW-attempt<n>.md` and `.run/run-complete-attempt<n>.json` (and the review-lite marker in the control dir). `REPORT.md` links them as "Earlier reviews".
+- **Stop flags are reset**, and the tripwire baseline is rebuilt from the repos as they are now.
+
+`resume` also refuses a live launchd job or a lock held by a live process. If it fails after writing the new attempt, it rolls back: the previous terminal state is restored and the new attempt stays in the history, closed as `failed` with the stop reason `resume-failed`. That attempt never ran, so the next `resume` ignores it when choosing where to continue (and numbers its attempt after it). See [Troubleshooting](troubleshooting.md#resume-refusals).
+
+**`launch` and an existing slug.** `launch` never overwrites a run: if `<slug>` already has a `RUN.json` it refuses, and tells you to `resume` it (when it is resumable) or use a new slug. The one exception is a launch that failed before the run ever started (state `failed`, no start time, no sessions, no attempt): it holds no history, so the same slug can be launched again.
+
+**In the report.** After a resume the Run section says "Resumed (n attempts)" and has an Attempts table. The cost section shows the cumulative total, and the budget percentage is the last attempt's spend over its own budget. `status` shows the same, for the last attempt that actually ran (a `resume-failed` attempt is not counted). The report's Attempts table still lists a failed resume with its stop reason.
 
 ## Artifacts
 
@@ -64,8 +93,9 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `PLAN.md` | Plan written in the plan phase, reviewed by @oracle |
 | `STATUS.md` | Live task table, updated on every state change |
 | `DECISIONS.md` | Every agent decision, with @oracle verdicts for risky ones |
-| `REPORT.md` | Final report: outcome, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. |
-| `.run/RUN.json` | State, phase, cost total, session ids, PID, port, server URL, profile and skills summary (zod-validated) |
+| `REPORT.md` | Final report: outcome, attempts of a resumed run, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. |
+| `FINAL_REVIEW.md` | The oracle's final review. After a resume the earlier ones are kept as `FINAL_REVIEW-attempt<n>.md` (and `.run/run-complete-attempt<n>.json`) |
+| `.run/RUN.json` | State, phase, cost total, attempts, session ids, PID, port, server URL, profile and skills summary (zod-validated) |
 | `.run/cost.jsonl` | Cost ledger lines (`session-info` or `estimate`) |
 | `.run/tasks.jsonl` | Task events appended by agents |
 | `.run/decisions.jsonl` | Structured decisions |

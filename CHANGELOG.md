@@ -11,11 +11,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- `nightgem resume <slug> --budget <usd>` continues a stopped, over-budget, failed or stalled run as a new attempt from the first unfinished phase, re-opening the tasks a wind-down parked and reusing the worktrees and the frozen run context. `stop` on a run whose job is gone (a crash) now closes its attempt, so `crash` → `stop` → `resume` works (#9)
 - `npm link` puts `nightgem` on your PATH from a clone (the bins resolve `src/` and `dist/` through the symlink), `uninstall` prints the `npm unlink -g nightgem` hint, and the docs use `nightgem <command>` (#8)
 - `doctor` warns when `nightgem` is missing from the PATH or points at another checkout (`cli on PATH`), and `doctor --verbose` prints the full detail of every check (#8)
 
 ### Changed
 
+- The budget applies per attempt: the 85% and 100% stops compare the attempt's own spend with its budget. `status` and the report show the attempts, the attempt's budget use and the cumulative cost, and link the earlier reviews (#9)
 - Heredocs and a bare `mktemp` now work inside a run: `TMPPREFIX` points into the run tmp dir (zsh heredocs) and a read-only `mktemp` shim is first on `PATH`. The sandbox write allowance is unchanged: bash and `sh` heredocs still need a writable working directory (the run dir or a worktree). The run tmp dir is wiped when the server starts, and the canary now fails the launch if any of this stops working or if `/private/var/tmp` becomes writable (#7)
 - `doctor` fails (hard) when oh-my-opencode-slim is configured but not yet in OpenCode's cache, and tells you to start OpenCode once (#8)
 - `doctor` and the `launch` warnings print at most 200 characters per line, with long details summarised (#8)
