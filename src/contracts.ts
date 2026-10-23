@@ -193,6 +193,23 @@ export type RunContextSnapshot = z.infer<typeof RunContextSnapshot>;
 
 // --- RunManifest (RUN.json) ------------------------------------------------------------------
 
+/**
+ * One attempt of a run: the first launch, then each `resume`. Spend is measured per attempt against that attempt's
+ * `budgetUsd`; `costAtStartUsd` is the run's cumulative cost when the attempt began.
+ */
+export const RunAttempt = z.object({
+  n: z.number().int().min(1),
+  startedAt: z.string().min(1),
+  endedAt: z.string().min(1).optional(),
+  /** The terminal state the attempt ended in. Absent while it is open. */
+  state: RunState.refine(isTerminalRunState, { message: 'an attempt state must be terminal' }).optional(),
+  stopReason: z.string().optional(),
+  budgetUsd: z.number().positive(),
+  costAtStartUsd: z.number().nonnegative(),
+  costUsd: z.number().nonnegative().optional(),
+});
+export type RunAttempt = z.infer<typeof RunAttempt>;
+
 /** Fields shared by v1 and v2. */
 const RunManifestBase = z.object({
   slug: z.string().min(1),
@@ -228,6 +245,12 @@ const RunManifestBase = z.object({
   stopReason: z.string().optional(),
   nudges: z.number().int().nonnegative().default(0),
   defects: z.array(Defect).default([]),
+  /**
+   * Additive and optional, so v1 and v2 manifests still parse and the schema version is unchanged. Absent means a
+   * single implicit attempt (see `attemptsOf`). Caveat: `z.object` strips unknown keys, so an older checkout that
+   * reads and rewrites a RUN.json silently drops `attempts`; `attemptsOf` then falls back to the implicit attempt.
+   */
+  attempts: z.array(RunAttempt).optional(),
 });
 
 /** v1: written by earlier versions. Read-only; upgraded by `parseRunManifest`. */
@@ -253,6 +276,28 @@ export const RunManifest = RunManifestBase.extend({
   instructions: z.object({ path: z.string().optional(), sha256: z.string().min(1) }).optional(),
 });
 export type RunManifest = z.infer<typeof RunManifest>;
+
+/**
+ * The attempts of a run. With `attempts` recorded, returns them. Otherwise the run is a single attempt, built from the
+ * top-level fields (`state` only when terminal; `costAtStartUsd` is 0).
+ */
+export function attemptsOf(
+  m: Pick<RunManifest, 'attempts' | 'startedAt' | 'createdAt' | 'endedAt' | 'state' | 'stopReason' | 'budgetUsd' | 'costUsd'>,
+): RunAttempt[] {
+  if (m.attempts !== undefined) return m.attempts;
+  return [
+    {
+      n: 1,
+      startedAt: m.startedAt ?? m.createdAt,
+      ...(m.endedAt === undefined ? {} : { endedAt: m.endedAt }),
+      ...(isTerminalRunState(m.state) ? { state: m.state } : {}),
+      ...(m.stopReason === undefined ? {} : { stopReason: m.stopReason }),
+      budgetUsd: m.budgetUsd,
+      costAtStartUsd: 0,
+      costUsd: m.costUsd,
+    },
+  ];
+}
 
 /** Thrown when a v1 RUN.json cannot be upgraded because `runDir` is not `<ws>/.specs/<slug>/.run`. */
 export class ManifestUpgradeError extends Error {

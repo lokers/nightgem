@@ -11,7 +11,9 @@ import {
   isExecutionTerminal,
   isTerminalRunState,
   ModelRef,
+  attemptsOf,
   parseModelRef,
+  RunAttempt,
   PermissionRepliedData,
   PermissionRequest,
   RunComplete,
@@ -408,5 +410,72 @@ describe('run context contracts', () => {
     const parsed = RunContextSnapshot.parse(snap);
     expect(parsed.profile.data.skills.exclude).toEqual([]);
     expect(RunContextSnapshot.parse(JSON.parse(JSON.stringify(parsed)))).toEqual(parsed);
+  });
+});
+
+describe('RunManifest attempts', () => {
+  const fixture = (name: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(REPO_ROOT, 'test', 'fixtures', name), 'utf8'));
+  const attempt = { n: 1, startedAt: '2026-10-21T10:00:00.000Z', budgetUsd: 5, costAtStartUsd: 0 };
+
+  it('parses the v1, v2 and v2-with-attempts fixtures; writes stay v2', () => {
+    const v1 = parseRunManifest(fixture('manifest-v1.json'));
+    const v2 = parseRunManifest(fixture('manifest-v2.json'));
+    const withAttempts = parseRunManifest(fixture('manifest-v2-attempts.json'));
+    for (const m of [v1, v2, withAttempts]) expect(m.schemaVersion).toBe(2);
+    expect(v1.attempts).toBeUndefined();
+    expect(v2.attempts).toBeUndefined();
+    expect(withAttempts.attempts).toHaveLength(2);
+  });
+
+  it('round-trips attempts through parse and write', () => {
+    const m = parseRunManifest(fixture('manifest-v2-attempts.json'));
+    const again = parseRunManifest(JSON.parse(JSON.stringify(m)));
+    expect(again).toEqual(m);
+    expect(again.attempts?.[0]).toMatchObject({ n: 1, state: 'aborted-budget', budgetUsd: 5, costUsd: 5.1 });
+    // an open attempt (no end, no state) is valid
+    expect(RunManifest.parse({ ...minimalManifest, attempts: [attempt] }).attempts).toEqual([attempt]);
+  });
+
+  it('rejects invalid attempt entries', () => {
+    const bad = (over: Record<string, unknown>) => RunManifest.safeParse({ ...minimalManifest, attempts: [{ ...attempt, ...over }] }).success;
+    expect(bad({})).toBe(true);
+    expect(bad({ n: 0 })).toBe(false);
+    expect(bad({ n: 1.5 })).toBe(false);
+    expect(bad({ startedAt: undefined })).toBe(false);
+    expect(bad({ budgetUsd: 0 })).toBe(false);
+    expect(bad({ costAtStartUsd: -1 })).toBe(false);
+    expect(bad({ costUsd: -0.1 })).toBe(false);
+    expect(bad({ state: 'bogus' })).toBe(false);
+    expect(bad({ state: 'running' })).toBe(false);
+    expect(bad({ state: 'stopped' })).toBe(true);
+    expect(RunAttempt.safeParse('x').success).toBe(false);
+  });
+
+  it('attemptsOf builds one implicit attempt for a manifest without attempts', () => {
+    const v1 = parseRunManifest(fixture('manifest-v1.json'));
+    expect(attemptsOf(v1)).toEqual([
+      {
+        n: 1,
+        startedAt: '2026-01-15T22:00:30.000Z',
+        endedAt: '2026-01-15T23:10:00.000Z',
+        state: 'completed',
+        budgetUsd: 10,
+        costAtStartUsd: 0,
+        costUsd: 1.8,
+      },
+    ]);
+    // never started and not terminal: createdAt, no state or end
+    expect(attemptsOf(RunManifest.parse(minimalManifest))).toEqual([
+      { n: 1, startedAt: minimalManifest.createdAt, budgetUsd: 100, costAtStartUsd: 0, costUsd: 0 },
+    ]);
+    const stopped = RunManifest.parse({ ...minimalManifest, state: 'stopped', stopReason: 'user stop', endedAt: '2026-10-21T11:00:00.000Z' });
+    expect(attemptsOf(stopped)[0]).toMatchObject({ state: 'stopped', stopReason: 'user stop', endedAt: '2026-10-21T11:00:00.000Z' });
+  });
+
+  it('attemptsOf returns the recorded attempts as they are', () => {
+    const m = parseRunManifest(fixture('manifest-v2-attempts.json'));
+    expect(attemptsOf(m)).toBe(m.attempts);
+    expect(attemptsOf(m).map((a) => a.n)).toEqual([1, 2]);
   });
 });
