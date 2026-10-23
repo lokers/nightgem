@@ -23,7 +23,8 @@ export const CLI_BIN_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 
 
 /**
  * How to run this CLI from a shell, for user-facing hints: `<node> <abs bin/nightgem.mjs>`, shell-quoted like the
- * `{{NODE}} {{BIN}}` the install renders. There is no `nightgem` binary on the PATH.
+ * `{{NODE}} {{BIN}}` the install renders. Absolute on purpose: `nightgem` is on the PATH only after `npm link`, and launchd
+ * has no PATH, so the hints must work with or without the link.
  */
 export function cliInvocation(nodePath: string = process.execPath): string {
   return `${shellQuote(nodePath)} ${shellQuote(CLI_BIN_PATH)}`;

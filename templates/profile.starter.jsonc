@@ -1,5 +1,5 @@
-// nightgem user profile. Written by `node <checkout>/bin/nightgem.mjs install`; edit freely.
-// JSONC: comments and trailing commas are allowed. Check it with `node <checkout>/bin/nightgem.mjs profile validate`.
+// nightgem user profile. Written by `nightgem install`; edit freely.
+// JSONC: comments and trailing commas are allowed. Check it with `nightgem profile validate`.
 {
   "version": 1,
 

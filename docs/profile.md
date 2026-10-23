@@ -91,7 +91,7 @@ Every path is realpath'd, so a symlinked skill is counted once. The first root w
 
 ## Tracker
 
-The tracker is used **only in the spec phase**, by `/nightgem`, which reads your settings with `node bin/nightgem.mjs profile show --json`. The overnight run denies every tracker CLI, so everything the run needs must be pasted into `SPEC.md`.
+The tracker is used **only in the spec phase**, by `/nightgem`, which reads your settings with `nightgem profile show --json`. The overnight run denies every tracker CLI, so everything the run needs must be pasted into `SPEC.md`.
 
 - `fetchCommand` is run with `{KEY}` replaced by the key found in your idea text (matched with `keyPattern`). `linkedFetchCommand` gets `{KEYS}` for linked tickets.
 - With no tracker configured, the spec phase asks you to paste the ticket.

@@ -3,6 +3,12 @@
 All notable changes to nightgem are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves experimental status.
 
+## [Unreleased]
+
+### Added
+
+- `npm link` puts `nightgem` on your PATH from a clone (the bins resolve `src/` and `dist/` through the symlink), `uninstall` prints the `npm unlink -g nightgem` hint, and the docs use `nightgem <command>` (#8)
+
 ## [0.1.0] - 2026-10-23
 
 First public release. Experimental: macOS only, run from a clone (not published to npm yet).

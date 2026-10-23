@@ -14,7 +14,7 @@ cd nightgem
 npm ci
 ```
 
-Run the CLI from the checkout with `node bin/nightgem.mjs <command>` or `npm run cli -- <command>`.
+Run `npm run build && npm link` once to put `nightgem` on your PATH, then use `nightgem <command>` (or `npm run cli -- <command>`, which runs `src/` directly).
 
 ## Tests
 
@@ -74,7 +74,7 @@ Work is tracked in [GitHub issues](https://github.com/lokers/nightgem/issues), g
 
 ## No personal or company data
 
-Tracked files must not contain personal paths, company or employer names, product names other than nightgem, OpenCode and oh-my-opencode-slim, real ticket keys, email addresses (the maintainer contact in the policy files is the one exception) or internal hostnames. This is enforced by `src/audit.ts`, `test/leaks.test.ts` and `node bin/nightgem.mjs doctor --audit-repo`.
+Tracked files must not contain personal paths, company or employer names, product names other than nightgem, OpenCode and oh-my-opencode-slim, real ticket keys, email addresses (the maintainer contact in the policy files is the one exception) or internal hostnames. This is enforced by `src/audit.ts`, `test/leaks.test.ts` and `nightgem doctor --audit-repo`.
 
 - Use `acme-api` / `acme-web` as repo names, `JIRA-123` as a ticket key, `/Users/alice` or `/Users/alice/work` as a home path, `example.com` / `example.invalid` as hosts, and `{{WORKSPACE}}` / `{{HOME}}` placeholders in corpora.
 - Scrub recorded fixtures before you commit them. Never paste raw terminal output, logs, run reports or session recordings without reading them line by line.

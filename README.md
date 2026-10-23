@@ -26,12 +26,12 @@ Check the [prerequisites](#prerequisites) first (macOS, Node, OpenCode with oh-m
 
 ```
 git clone https://github.com/lokers/nightgem && cd nightgem
-npm ci && npm run build
-node bin/nightgem.mjs install --workspace ~/work    # slash commands + starter profile
-node bin/nightgem.mjs doctor                        # tells you what is missing
+npm ci && npm run build && npm link                # puts `nightgem` on your PATH
+nightgem install --workspace ~/work                 # slash commands + starter profile
+nightgem doctor                                     # tells you what is missing
 ```
 
-(In a clone the bin runs `src/` through `tsx` automatically; `npm run build` produces `dist/`.)
+(In a clone the bin runs `src/` through `tsx` automatically; `npm run build` produces `dist/`. `npm link` only symlinks the clone into your global npm prefix: nothing is published or downloaded.)
 
 Then, in the OpenCode TUI or OpenCode.app:
 
@@ -40,7 +40,7 @@ Then, in the OpenCode TUI or OpenCode.app:
 3. Close the TUI. Keep the Mac on AC power. Check in with `/nightgem-status <slug>`; stop with `/nightgem-stop <slug>`.
 4. In the morning read `<workspaceRoot>/.specs/<slug>/REPORT.md`, then review the branches in `<repo>/.worktrees/<slug>`. Pushing and PRs are yours.
 
-`install` writes `~/.config/opencode/commands/nightgem*.md` and, if you have none, a starter `~/.config/nightgem/profile.jsonc`. It never touches an existing profile. `uninstall` removes only the commands it installed and you did not edit.
+`install` writes `~/.config/opencode/commands/nightgem*.md` and, if you have none, a starter `~/.config/nightgem/profile.jsonc`. It never touches an existing profile. `uninstall` removes only the commands it installed and you did not edit. To remove the PATH link as well, run `npm unlink -g nightgem`.
 
 <details>
 <summary><b>Not using Anthropic?</b> Set a model for every agent</summary>
@@ -162,7 +162,7 @@ The complete field reference, skill detection and tracker behaviour are in **[do
 
 ## CLI reference
 
-The CLI is not on your PATH. Run `node bin/nightgem.mjs <command>` from the clone (or `npm run cli -- <command>`).
+`npm link` (see the quickstart) puts `nightgem` on your PATH. Without the link, run `node <checkout>/bin/nightgem.mjs <command>` instead. The installed slash commands and the launchd job always use absolute paths, so they work either way.
 
 | Command | What it does |
 |---|---|

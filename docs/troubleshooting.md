@@ -2,7 +2,7 @@
 
 [← README](../README.md) · [How it works](how-it-works.md) · [Profile](profile.md) · [Safety model](safety-model.md) · [Troubleshooting](troubleshooting.md) · [OpenCode notes](opencode-notes.md)
 
-Run `node bin/nightgem.mjs doctor` first. Lines starting with `FAIL` block a launch; `warn` lines do not. `doctor` never crashes on a missing or broken profile: that is a single `FAIL profile` line.
+Run `nightgem doctor` first. Lines starting with `FAIL` block a launch; `warn` lines do not. `doctor` never crashes on a missing or broken profile: that is a single `FAIL profile` line.
 
 ## Doctor failures
 
