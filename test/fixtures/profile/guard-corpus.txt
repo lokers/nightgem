@@ -941,3 +941,226 @@ block|shell|cat {{HOME}}/.config/opencode/skills/../opencode.json
 block|shell|cat "$HOME"/.config/opencode/skills/../service.json
 block|shell|ls ~/.config/opencode
 block|shell|cd ~/.config/opencode/skills && cat ../opencode.json
+# ---- forms of a denied command (gh) that must stay blocked: pinned against the guard as of 0.1.0. A change to the command-word boundaries (`/`, `=`) must keep every one of these blocking
+# separators, grouping and control-flow bodies
+block|shell|echo a; gh pr list
+block|shell|echo a && gh pr list
+block|shell|false || gh pr list
+block|shell|echo a | gh pr list
+block|shell|echo a & gh pr list
+block|shell|echo a\ngh pr list
+block|shell|(gh pr list)
+block|shell|(cd x; gh pr list)
+block|shell|{ gh pr list; }
+block|shell|{ echo a; gh pr list; }
+block|shell|! gh pr list
+block|shell|if true; then gh pr list; fi
+block|shell|if gh pr list; then echo ok; fi
+block|shell|for i in 1 2; do gh pr list; done
+block|shell|while true; do gh pr list; done
+block|shell|case x in x) gh pr list;; esac
+block|shell|case x in x) echo a;; *) gh pr list;; esac
+block|shell|true\nif true\nthen\n  gh pr list\nfi
+block|shell|for i in 1\ndo\n  gh pr list\ndone
+block|shell|case $x in\n  a) gh pr list ;;\nesac
+# leading assignment
+block|shell|FOO=1 /x/gh pr list
+block|shell|FOO=1 BAR=2 gh pr list
+block|shell|FOO=1 gh pr list
+block|shell|FOO="a b" /usr/bin/gh pr list
+# wrappers and their options
+block|shell|env gh pr list
+block|shell|env -i FOO=1 /usr/bin/gh pr list
+block|shell|env -u HOME gh pr list
+block|shell|env -u HOME -u PATH /usr/bin/gh pr list
+block|shell|env -S 'gh pr list'
+block|shell|command gh pr list
+block|shell|command -p gh pr list
+block|shell|command -p /usr/bin/gh pr list
+block|shell|builtin gh pr list
+block|shell|exec gh pr list
+block|shell|exec -a x gh pr list
+block|shell|exec -a x /usr/bin/gh pr list
+block|shell|nohup gh pr list
+block|shell|nohup /usr/bin/gh pr list &
+block|shell|time gh pr list
+block|shell|time -p gh pr list
+block|shell|nice gh pr list
+block|shell|nice -n 10 gh pr list
+block|shell|nice -n 10 /usr/bin/gh pr list
+block|shell|timeout 5 gh pr list
+block|shell|timeout -s KILL 5 gh pr list
+block|shell|timeout -s KILL 5 /usr/bin/gh pr list
+block|shell|stdbuf -o0 gh pr list
+block|shell|stdbuf -oL -eL /usr/bin/gh pr list
+block|shell|sudo gh pr list
+block|shell|sudo -u root gh pr list
+block|shell|sudo -u root /usr/bin/gh pr list
+block|shell|xargs gh pr list
+block|shell|echo x | xargs gh pr list
+block|shell|echo x | xargs -I{} gh pr view {}
+block|shell|echo x | xargs -I {} /usr/bin/gh pr view {}
+block|shell|echo x | xargs -n1 -P2 gh pr view
+block|shell|find . -name x -exec gh pr view {} \;
+block|shell|find . -name x -execdir gh pr view {} \;
+block|shell|find . -name x -ok gh pr view {} \;
+block|shell|find . -type f -exec /usr/bin/gh pr view {} +
+block|shell|caffeinate gh pr list
+block|shell|caffeinate -i gh pr list
+block|shell|caffeinate -i /usr/bin/gh pr list
+block|shell|arch gh pr list
+block|shell|arch -arm64 gh pr list
+block|shell|arch -arm64 /usr/bin/gh pr list
+block|shell|script -q /dev/null gh pr list
+block|shell|script -q /dev/null /usr/bin/gh pr list
+block|shell|script -q /dev/null sh -c 'gh pr list'
+# path spellings of the command
+block|shell|./gh pr list
+block|shell|../gh pr list
+block|shell|../../bin/gh pr list
+block|shell|bin/gh pr list
+block|shell|node_modules/.bin/gh pr list
+block|shell|"/usr/bin/gh" pr list
+block|shell|'/usr/bin/gh' pr list
+block|shell|/usr/bin//gh pr list
+block|shell|/usr/bin/./gh pr list
+block|shell|//usr/bin/gh pr list
+block|shell|/usr/local/../bin/gh pr list
+block|shell|~/bin/gh pr list
+block|shell|~/.local/bin/gh pr list
+block|shell|$HOME/bin/gh pr list
+block|shell|${HOME}/bin/gh pr list
+block|shell|"$HOME/bin/gh" pr list
+block|shell|"${HOME}/bin/gh" pr list
+block|shell|{{HOME}}/bin/gh pr list
+# inner strings: sh -c, eval, substitutions, here-strings, heredocs and data piped into a shell
+block|shell|sh -c 'gh pr list'
+block|shell|sh -c "gh pr list"
+block|shell|bash -c 'gh pr list'
+block|shell|bash -lc 'gh pr list'
+block|shell|zsh -c 'gh pr list'
+block|shell|zsh -lc "gh pr list"
+block|shell|sh -c 'echo a; gh pr list'
+block|shell|sh -c 'sh -c "gh pr list"'
+block|shell|bash -c "zsh -c 'gh pr list'"
+block|shell|sh -c "/usr/bin/gh pr list"
+block|shell|eval gh pr list
+block|shell|eval 'gh pr list'
+block|shell|eval "gh pr list"
+block|shell|eval "echo a; gh pr list"
+block|shell|eval "eval 'gh pr list'"
+block|shell|echo $(gh pr list)
+block|shell|echo "$(gh pr list)"
+block|shell|echo $(echo $(gh pr list))
+block|shell|echo $(echo "$(gh pr list)")
+block|shell|echo $(echo $(echo $(gh pr list)))
+block|shell|x=$(gh pr list)
+block|shell|echo `gh pr list`
+block|shell|echo "`gh pr list`"
+block|shell|echo `echo \`gh pr list\``
+block|shell|diff <(gh pr list) /dev/null
+block|shell|cat <(gh pr list)
+block|shell|cat <(echo a) <(gh pr list)
+block|shell|tee >(gh pr list)
+block|shell|sh <<< 'gh pr list'
+block|shell|bash <<< "gh pr list"
+block|shell|zsh <<< 'gh pr list'
+block|shell|sh <<< gh
+block|shell|sh <<EOF\ngh pr list\nEOF
+block|shell|sh <<'EOF'\ngh pr list\nEOF
+block|shell|bash <<'EOF'\necho a\ngh pr list\nEOF
+block|shell|bash <<-EOF\n	gh pr list\nEOF
+block|shell|bash -s <<'EOF'\ngh pr list\nEOF
+block|shell|zsh <<'EOF'\ngh pr list\nEOF
+block|shell|bash -c "$(cat <<'EOF'\ngh pr list\nEOF\n)"
+block|shell|echo 'gh pr list' | sh
+block|shell|echo 'gh pr list' | bash
+block|shell|echo 'gh pr list' | zsh
+block|shell|printf 'gh pr list\n' | sh
+block|shell|printf '%s\n' 'gh pr list' | bash -s
+block|shell|cat <<'EOF' | sh\ngh pr list\nEOF
+block|shell|echo "echo a; gh pr list" | sh
+block|shell|echo 'gh pr list' | sudo sh
+block|shell|echo 'gh pr list' | env sh
+block|shell|echo 'gh pr list' | sh -s
+block|shell|echo 'gh pr list' | bash -
+block|shell|source <(echo 'gh pr list')
+block|shell|. <(echo 'gh pr list')
+block|shell|bash <<-EOF\n	echo a\n	gh pr list\nEOF
+block|shell|sh <<-"EOF"\n	gh pr list\nEOF
+# indirection: alias, functions and copies of the binary
+block|shell|alias g=gh; g pr list
+block|shell|alias g='gh pr list'
+block|shell|alias g="/usr/bin/gh"
+block|shell|function g { gh pr list; }; g
+block|shell|g() { gh pr list; }; g
+block|shell|g() { /usr/bin/gh "$@"; }
+block|shell|f() { command gh pr list; }
+block|shell|cp /usr/bin/gh ./x && ./x pr list
+block|shell|cp /opt/homebrew/bin/gh /tmp/x
+block|shell|cp $(which gh) x
+block|shell|ln -s /usr/bin/gh x
+block|shell|ln -s /usr/bin/gh ./x && ./x pr list
+block|shell|ln /usr/bin/gh x
+block|shell|install /usr/bin/gh x
+# inline interpreter code
+block|shell|python -c 'import os; os.system("gh pr list")'
+block|shell|python3 -c "import subprocess; subprocess.run(['gh', 'pr', 'list'])"
+block|shell|python3 -c 'import os; os.system("/usr/bin/gh pr list")'
+block|shell|node -e 'require("child_process").execSync("gh pr list")'
+block|shell|node -e "require('child_process').execSync('/usr/bin/gh pr list')"
+block|shell|node --eval 'require("child_process").execSync("gh pr list")'
+block|shell|perl -e 'system("gh pr list")'
+block|shell|perl -e 'exec("/usr/bin/gh", "pr", "list")'
+block|shell|ruby -e 'system("gh pr list")'
+block|shell|awk 'BEGIN { system("gh pr list") }'
+block|shell|awk 'BEGIN{system("/usr/bin/gh pr list")}'
+block|shell|awk 'BEGIN { "gh pr list" | getline x; print x }'
+block|shell|python3 - <<'PY'\nimport os\nos.system("gh pr list")\nPY
+block|shell|python3 <<'PY'\nimport subprocess\nsubprocess.run(["gh", "pr", "list"])\nPY
+block|shell|node - <<'JS'\nrequire("child_process").execSync("gh pr list")\nJS
+block|shell|node <<'JS'\nrequire('child_process').execSync('gh pr list')\nJS
+block|shell|perl <<'PL'\nsystem("gh pr list");\nPL
+block|shell|cat > x.py <<'EOF'\nimport os\nos.system("gh pr list")\nEOF\npython3 x.py
+# assignment then $X, make variables, git exec hooks and npx -c
+block|shell|X=/usr/bin/gh; $X pr list
+block|shell|X=/usr/bin/gh\n$X pr list
+block|shell|X=gh; $X pr list
+block|shell|X=gh; "$X" pr list
+block|shell|X=gh; ${X} pr list
+block|shell|X=gh && $X pr list
+block|shell|export X=/usr/bin/gh; $X pr list
+block|shell|export X=gh; $X pr list
+block|shell|X=/usr/bin/gh command $X pr list
+block|shell|declare X=gh; $X pr list
+block|shell|local X=gh; $X pr list
+block|shell|X=g; Y=h; ${X}${Y} pr list
+block|shell|make GH=/usr/bin/gh
+block|shell|make GH=gh test
+block|shell|make test GH=/usr/bin/gh
+block|shell|make -C x GH=/usr/bin/gh all
+block|shell|git rebase -x 'gh pr list' main
+block|shell|git rebase -x gh main
+block|shell|git rebase -i -x '/usr/bin/gh pr list' HEAD~2
+block|shell|git rebase --exec 'gh pr list' main
+block|shell|git submodule foreach 'gh pr list'
+block|shell|git submodule foreach --recursive 'gh pr list'
+block|shell|git submodule foreach gh pr list
+block|shell|git submodule foreach '/usr/bin/gh pr list'
+block|shell|git bisect run gh pr list
+block|shell|git filter-branch --tree-filter 'gh pr list' HEAD
+block|shell|git -c core.pager='gh pr list' log
+block|shell|git -c alias.x='!gh pr list' x
+block|shell|git config alias.x '!gh pr list'
+block|shell|npx -c 'gh pr list'
+block|shell|npx --call 'gh pr list'
+block|shell|npx -c '/usr/bin/gh pr list'
+block|shell|npx -c "echo a; gh pr list"
+block|shell|npm exec -c 'gh pr list'
+block|shell|npm exec -- gh pr list
+block|shell|npx gh pr list
+block|shell|npm run x --script-shell=gh
+block|shell|yarn exec gh pr list
+block|shell|pnpm exec gh pr list
+block|shell|pnpm dlx gh pr list
+block|shell|npm_config_script_shell=gh npm run x

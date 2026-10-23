@@ -341,6 +341,171 @@ allow|shell|cd {{WT}} && mkdir -p scripts && cat > test/greet.test.js <<'EOF'\ni
 allow|shell|cd {{WORKSPACE}}/.specs/{{SLUG}} && python3 - <<'PY'\np='PLAN.md'\ns=open(p).read().replace("`a`", "$(b)")\nopen(p,'w').write(s)\nPY
 deny|shell|cd {{WT}} && cat > test/a.js <<'EOF'\nx => y\nEOF\ngit push origin HEAD
 deny|shell|cat >> {{WORKSPACE}}/.specs/{{SLUG}}/.run/tasks.jsonl <<'EOF'\n{}\nEOF\ngh pr list
+# ---- forms of a denied command (gh) in the permission layer: only the forms the profile denies. The guard blocks all of them too (test/fixtures/profile/guard-corpus.txt),
+# and test/guard-corpus-replay.test.ts replays this section through it. Keep every one denied when the guard's command-word boundaries change.
+# separators, grouping and control-flow bodies
+deny|shell|echo a; gh pr list
+deny|shell|echo a && gh pr list
+deny|shell|false || gh pr list
+deny|shell|echo a | gh pr list
+deny|shell|echo a & gh pr list
+deny|shell|echo a\ngh pr list
+deny|shell|(gh pr list)
+deny|shell|(cd x; gh pr list)
+deny|shell|{ gh pr list; }
+deny|shell|{ echo a; gh pr list; }
+deny|shell|! gh pr list
+deny|shell|if true; then gh pr list; fi
+deny|shell|if gh pr list; then echo ok; fi
+deny|shell|for i in 1 2; do gh pr list; done
+deny|shell|while true; do gh pr list; done
+deny|shell|case x in x) gh pr list;; esac
+deny|shell|case x in x) echo a;; *) gh pr list;; esac
+deny|shell|true\nif true\nthen\n  gh pr list\nfi
+deny|shell|for i in 1\ndo\n  gh pr list\ndone
+deny|shell|case $x in\n  a) gh pr list ;;\nesac
+# leading assignment
+deny|shell|FOO=1 BAR=2 gh pr list
+deny|shell|FOO=1 gh pr list
+# wrappers and their options
+deny|shell|env gh pr list
+deny|shell|env -i gh pr list
+deny|shell|env -u HOME gh pr list
+deny|shell|env -S 'gh pr list'
+deny|shell|command gh pr list
+deny|shell|command -p gh pr list
+deny|shell|builtin gh pr list
+deny|shell|exec gh pr list
+deny|shell|exec -a x gh pr list
+deny|shell|nohup gh pr list
+deny|shell|time gh pr list
+deny|shell|time -p gh pr list
+deny|shell|nice gh pr list
+deny|shell|nice -n 10 gh pr list
+deny|shell|timeout 5 gh pr list
+deny|shell|timeout -s KILL 5 gh pr list
+deny|shell|stdbuf -o0 gh pr list
+deny|shell|sudo gh pr list
+deny|shell|sudo -u root gh pr list
+deny|shell|xargs gh pr list
+deny|shell|echo x | xargs gh pr list
+deny|shell|echo x | xargs -I{} gh pr view {}
+deny|shell|echo x | xargs -n1 -P2 gh pr view
+deny|shell|find . -name x -exec gh pr view {} \;
+deny|shell|find . -name x -execdir gh pr view {} \;
+deny|shell|find . -name x -ok gh pr view {} \;
+deny|shell|caffeinate gh pr list
+deny|shell|caffeinate -i gh pr list
+deny|shell|arch gh pr list
+deny|shell|arch -arm64 gh pr list
+deny|shell|script -q /dev/null gh pr list
+deny|shell|script -q /dev/null sh -c 'gh pr list'
+# path spellings of the command
+deny|shell|/usr/bin//gh pr list
+deny|shell|/usr/bin/./gh pr list
+deny|shell|//usr/bin/gh pr list
+deny|shell|/usr/local/../bin/gh pr list
+deny|shell|~/bin/gh pr list
+deny|shell|~/.local/bin/gh pr list
+deny|shell|$HOME/bin/gh pr list
+deny|shell|${HOME}/bin/gh pr list
+deny|shell|{{HOME}}/bin/gh pr list
+# inner strings: sh -c, eval, substitutions, here-strings, heredocs and data piped into a shell
+deny|shell|sh -c 'gh pr list'
+deny|shell|sh -c "gh pr list"
+deny|shell|bash -c 'gh pr list'
+deny|shell|bash -lc 'gh pr list'
+deny|shell|zsh -c 'gh pr list'
+deny|shell|zsh -lc "gh pr list"
+deny|shell|sh -c 'echo a; gh pr list'
+deny|shell|sh -c 'sh -c "gh pr list"'
+deny|shell|bash -c "zsh -c 'gh pr list'"
+deny|shell|sh -c "/usr/bin/gh pr list"
+deny|shell|eval gh pr list
+deny|shell|eval 'gh pr list'
+deny|shell|eval "gh pr list"
+deny|shell|eval "echo a; gh pr list"
+deny|shell|eval "eval 'gh pr list'"
+deny|shell|echo $(gh pr list)
+deny|shell|echo "$(gh pr list)"
+deny|shell|echo $(echo $(gh pr list))
+deny|shell|echo $(echo "$(gh pr list)")
+deny|shell|echo $(echo $(echo $(gh pr list)))
+deny|shell|x=$(gh pr list)
+deny|shell|echo `gh pr list`
+deny|shell|echo "`gh pr list`"
+deny|shell|echo `echo \`gh pr list\``
+deny|shell|diff <(gh pr list) /dev/null
+deny|shell|cat <(gh pr list)
+deny|shell|cat <(echo a) <(gh pr list)
+deny|shell|tee >(gh pr list)
+deny|shell|sh <<< 'gh pr list'
+deny|shell|bash <<< "gh pr list"
+deny|shell|zsh <<< 'gh pr list'
+deny|shell|sh <<< gh
+deny|shell|sh <<EOF\ngh pr list\nEOF
+deny|shell|sh <<'EOF'\ngh pr list\nEOF
+deny|shell|bash <<'EOF'\necho a\ngh pr list\nEOF
+deny|shell|bash -s <<'EOF'\ngh pr list\nEOF
+deny|shell|zsh <<'EOF'\ngh pr list\nEOF
+deny|shell|bash -c "$(cat <<'EOF'\ngh pr list\nEOF\n)"
+deny|shell|echo 'gh pr list' | sh
+deny|shell|echo 'gh pr list' | bash
+deny|shell|echo 'gh pr list' | zsh
+deny|shell|printf 'gh pr list\n' | sh
+deny|shell|printf '%s\n' 'gh pr list' | bash -s
+deny|shell|cat <<'EOF' | sh\ngh pr list\nEOF
+deny|shell|echo "echo a; gh pr list" | sh
+deny|shell|echo 'gh pr list' | sudo sh
+deny|shell|echo 'gh pr list' | env sh
+deny|shell|echo 'gh pr list' | sh -s
+deny|shell|echo 'gh pr list' | bash -
+deny|shell|source <(echo 'gh pr list')
+deny|shell|. <(echo 'gh pr list')
+# indirection: alias, functions and copies of the binary
+deny|shell|alias g='gh pr list'
+deny|shell|function g { gh pr list; }; g
+deny|shell|g() { gh pr list; }; g
+deny|shell|f() { command gh pr list; }
+# inline interpreter code
+deny|shell|python -c 'import os; os.system("gh pr list")'
+deny|shell|python3 -c 'import os; os.system("/usr/bin/gh pr list")'
+deny|shell|node -e 'require("child_process").execSync("gh pr list")'
+deny|shell|node -e "require('child_process').execSync('/usr/bin/gh pr list')"
+deny|shell|node --eval 'require("child_process").execSync("gh pr list")'
+deny|shell|perl -e 'system("gh pr list")'
+deny|shell|ruby -e 'system("gh pr list")'
+deny|shell|awk 'BEGIN { system("gh pr list") }'
+deny|shell|awk 'BEGIN{system("/usr/bin/gh pr list")}'
+deny|shell|awk 'BEGIN { "gh pr list" | getline x; print x }'
+deny|shell|python3 - <<'PY'\nimport os\nos.system("gh pr list")\nPY
+deny|shell|node - <<'JS'\nrequire("child_process").execSync("gh pr list")\nJS
+deny|shell|node <<'JS'\nrequire('child_process').execSync('gh pr list')\nJS
+deny|shell|perl <<'PL'\nsystem("gh pr list");\nPL
+deny|shell|cat > x.py <<'EOF'\nimport os\nos.system("gh pr list")\nEOF\npython3 x.py
+# assignment then $X, make variables, git exec hooks and npx -c
+deny|shell|git rebase -x 'gh pr list' main
+deny|shell|git rebase -x gh main
+deny|shell|git rebase -i -x '/usr/bin/gh pr list' HEAD~2
+deny|shell|git rebase --exec 'gh pr list' main
+deny|shell|git submodule foreach 'gh pr list'
+deny|shell|git submodule foreach --recursive 'gh pr list'
+deny|shell|git submodule foreach gh pr list
+deny|shell|git submodule foreach '/usr/bin/gh pr list'
+deny|shell|git bisect run gh pr list
+deny|shell|git filter-branch --tree-filter 'gh pr list' HEAD
+deny|shell|git -c core.pager='gh pr list' log
+deny|shell|git -c alias.x='!gh pr list' x
+deny|shell|npx -c 'gh pr list'
+deny|shell|npx --call 'gh pr list'
+deny|shell|npx -c '/usr/bin/gh pr list'
+deny|shell|npx -c "echo a; gh pr list"
+deny|shell|npm exec -c 'gh pr list'
+deny|shell|npm exec -- gh pr list
+deny|shell|npx gh pr list
+deny|shell|yarn exec gh pr list
+deny|shell|pnpm exec gh pr list
+deny|shell|pnpm dlx gh pr list
 # ---- inputs: workspace-specific (skipped by default) ----
 # Probes that hold only with the workspace-specific inputs: SafetyInputs (a shell-pattern deny, generated-code edit denies and two skill roots)
 # and an MCP server in the user's global config (`mcpServerNames: ['atlassian']`).
