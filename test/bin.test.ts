@@ -34,7 +34,7 @@ afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 /** A throwaway environment: no inherited NIGHTGEM_*, OPENCODE_* or XDG_* variables, the given HOME, and the given PATH. */
 const cleanEnv = (path: string): Record<string, string> => ({ HOME: home, PATH: path, NPM_CONFIG_UPDATE_NOTIFIER: 'false' });
 
-/** What `npm link --prefix <prefix>` does for a bin: `<prefix>/bin/<name>` is a symlink to the package's bin file. */
+/** What `npm link` does for a bin (into the global prefix; set `npm_config_prefix` to choose it): `<prefix>/bin/<name>` is a symlink to the package's bin file. */
 function linkInto(prefix: string, name: string, target: string): string {
   mkdirSync(join(prefix, 'bin'), { recursive: true });
   const link = join(prefix, 'bin', name);
