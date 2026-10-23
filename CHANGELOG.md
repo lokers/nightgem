@@ -14,9 +14,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - `doctor` fails (hard) when oh-my-opencode-slim is configured but not yet in OpenCode's cache, and tells you to start OpenCode once (#8)
 - `doctor` and the `launch` warnings print at most 200 characters per line, with long details summarised (#8)
-
-### Changed
-
 - `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried (#9)
 
 ## [0.1.0] - 2026-10-23
