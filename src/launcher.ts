@@ -23,6 +23,7 @@ import {
   inspectWorktreeFs,
   isResumableState,
   parseResumeBudget,
+  RESUME_FAILED,
   STOPPED_AFTER_CRASH,
   type ResumeEligibility,
 } from './resume.ts';
@@ -144,11 +145,17 @@ function domain(uid: number): string {
   return `gui/${uid}`;
 }
 
-/** `launchctl print` succeeds when the job is loaded; `running` when it has a live pid. */
-async function jobState(exec: ExecFn, uid: number, label: string): Promise<{ loaded: boolean; running: boolean }> {
+/**
+ * `launchctl print` succeeds when the job is loaded; `running` when it has a live pid. A failure only means "not loaded" when
+ * launchctl says it cannot find the service (exit 113, or that wording); any other failure (no launchctl, a permission or
+ * domain error) is `unknown`, and callers that act on the answer must refuse rather than guess.
+ */
+async function jobState(exec: ExecFn, uid: number, label: string): Promise<{ loaded: boolean; running: boolean; unknown: boolean; detail: string }> {
   const r = await exec('launchctl', ['print', `${domain(uid)}/${label}`]);
-  if (r.exitCode !== 0) return { loaded: false, running: false };
-  return { loaded: true, running: /state = running/.test(r.stdout) };
+  if (r.exitCode === 0) return { loaded: true, running: /state = running/.test(r.stdout), unknown: false, detail: '' };
+  const text = (r.stderr || r.stdout).trim();
+  const notFound = r.exitCode === 113 || /could not find|not found|no such (service|process)/i.test(text);
+  return { loaded: false, running: false, unknown: !notFound, detail: `launchctl print exit ${r.exitCode}${text ? `: ${text.split('\n')[0]}` : ''}` };
 }
 
 export interface LaunchGatesInput {
@@ -242,7 +249,9 @@ export async function runLaunchGates(input: LaunchGatesInput): Promise<LaunchGat
   if ('error' in gitResolved) throw gitResolved.error;
   const label = launchdLabel(slug);
 
-  if ((await jobState(exec, deps.uid, label)).loaded) {
+  const existing = await jobState(exec, deps.uid, label);
+  if (existing.unknown) throw new Error(`Cannot tell whether the launchd job ${label} is already loaded (${existing.detail}); not launching.`);
+  if (existing.loaded) {
     throw new Error(`launchd job ${label} is already loaded. Run "${cliInvocation(deps.nodePath)} stop ${slug}" first.`);
   }
   return { runContext, spec, label, paths, opencodePath: opencodeResolved.path, gitPath: gitResolved.path, warnings };
@@ -313,7 +322,7 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
     // A control dir left by an earlier run of the same slug (a launch that failed before it started) may still carry its stop
     // flags, and the orchestrator fails the attempt on a stale one: clear them, and nothing else. Its stale `xdg-data` stays,
     // so the ledger can over-count the cost of the new run, which is the safe direction.
-    await deps.resetStopFlags?.(paths.controlDir);
+    await deps.resetStopFlags(paths.controlDir);
     manifest = buildLaunchManifest({
       slug,
       budgetUsd: input.budgetUsd,
@@ -398,7 +407,18 @@ export interface ResumeInput {
   sleep?: (ms: number) => Promise<void>;
   /** How long to wait for a booted-out job to disappear. Default 10 s. */
   bootoutWaitMs?: number;
+  /** Testing: a millisecond clock for the settle wait after the lock. Default `Date.now`. */
+  clock?: () => number;
 }
+
+/**
+ * The previous orchestrator detaches `sleep 2; launchctl bootout <label>` after it releases the lock. When the job was loaded,
+ * or the run ended only moments ago, a new job must not be bootstrapped before that has fired: wait until this long after we
+ * took the lock, then look again.
+ */
+export const RESUME_SETTLE_MS = 5_000;
+/** A run that ended less recently than this has no delayed bootout left in flight. */
+export const RECENT_END_MS = 30_000;
 
 export interface ResumeResult extends LaunchResult {
   attempt: number;
@@ -464,7 +484,9 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
   // 1. nothing is written or touched yet
   let eligible = await readEligible();
   const { readRunContext, resetStopFlags } = deps;
-  if (!readRunContext || !resetStopFlags) throw new Error('resume is not wired in these dependencies (readRunContext / resetStopFlags are missing)');
+  const sleep = input.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+  const clock = input.clock ?? Date.now;
+  const waitMs = input.bootoutWaitMs ?? 10_000;
   const manifest0 = eligible.manifest;
   let runContext: RunContextSnapshot;
   try {
@@ -487,32 +509,44 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
   } catch (e) {
     throw lockRefusal(e, slug, cli);
   }
-
-  let started: { attempts: ReturnType<typeof attemptsOf>; next: RunManifest } | undefined;
-  let bootstrapped = false;
+  const lockedAt = clock();
   const label = eligible.label;
-  try {
+
+  const readJob = async (): Promise<{ loaded: boolean; running: boolean }> => {
+    const j = await jobState(exec, deps.uid, label);
+    if (j.unknown) throw new Error(`Cannot tell whether the launchd job ${label} is loaded (${j.detail}); not resuming.`);
+    return j;
+  };
+  /** Boot the job out and poll until launchd has forgotten it (it goes a few seconds after the call). */
+  const bootoutAndWait = async (): Promise<{ loaded: boolean; running: boolean; exitCode: number; detail: string }> => {
+    const r = await bootout(exec, deps.uid, label);
+    let waited = 0;
+    let after = await readJob();
+    while (after.loaded && !after.running && waited < waitMs) {
+      await sleep(500);
+      waited += 500;
+      after = await readJob();
+    }
+    return { ...after, exitCode: r.exitCode, detail: (r.stderr || r.stdout).trim() };
+  };
+
+  const attemptResume = async (): Promise<{ plistPath: string; next: RunManifest; attempt: number; run: RunManifest }> => {
     eligible = await readEligible(); // a resume that raced us may have written already (the state is then `launching`)
 
     // 3. the job: a running one is never touched; a stale one must be gone before the new one is bootstrapped
-    const job = await jobState(exec, deps.uid, label);
+    const job = await readJob();
     if (job.running) {
-      throw new Error(`The launchd job ${label} is running although RUN.json says the run is ${eligible.manifest.state}. Check it with "${cli} status ${slug}" and stop it with "${cli} stop ${slug}" first.`);
+      throw new Error(
+        `The launchd job ${label} is running although RUN.json says the run is ${eligible.manifest.state}. Check it with "${cli} status ${slug}" and stop it with "${cli} stop ${slug}" first. ` +
+          'If the run just finished, wait a few seconds and retry.',
+      );
     }
+    const wasLoaded = job.loaded;
     if (job.loaded) {
-      const r = await bootout(exec, deps.uid, label);
-      const sleep = input.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
-      const waitMs = input.bootoutWaitMs ?? 10_000;
-      let waited = 0;
-      let after = await jobState(exec, deps.uid, label);
-      while (after.loaded && waited < waitMs) {
-        await sleep(500);
-        waited += 500;
-        after = await jobState(exec, deps.uid, label);
-      }
+      const after = await bootoutAndWait();
       if (after.running) throw new Error(`The launchd job ${label} started running again; not resuming. Check it with "${cli} status ${slug}".`);
       if (after.loaded) {
-        throw new Error(`The stale launchd job ${label} is still loaded after bootout${r.exitCode === 0 ? '' : ` (exit ${r.exitCode}: ${(r.stderr || r.stdout).trim()})`}. Run "launchctl bootout gui/${deps.uid}/${label}" and try again.`);
+        throw new Error(`The stale launchd job ${label} is still loaded after bootout${after.exitCode === 0 ? '' : ` (exit ${after.exitCode}: ${after.detail})`}. Run "launchctl bootout gui/${deps.uid}/${label}" and try again.`);
       }
       io.out(`Booted out the stale launchd job ${label}.`);
     }
@@ -531,11 +565,23 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
     });
     const repos = await deps.buildBaseline(gates.spec.repos.map((r) => r.path));
 
-    // 5. the one manifest write
+    // The old orchestrator's delayed bootout (see RESUME_SETTLE_MS) must have fired before we bootstrap, or it boots us out.
+    const endedMs = run.endedAt === undefined ? Number.NaN : Date.parse(run.endedAt);
+    const justEnded = Number.isFinite(endedMs) && deps.now().getTime() - endedMs < RECENT_END_MS;
+    if (wasLoaded || justEnded) {
+      const remaining = RESUME_SETTLE_MS - (clock() - lockedAt);
+      if (remaining > 0) await sleep(remaining);
+      const again = await readJob();
+      if (again.running || again.loaded) {
+        throw new Error(`The launchd job ${label} is ${again.running ? 'running' : 'loaded'} again after the previous run ended; not resuming. Check it with "${cli} status ${slug}" and try again in a few seconds.`);
+      }
+    }
+
+    // 5. the one manifest write. Anything from here on may have landed, so any failure rolls back.
     const next = buildResumeManifest({ manifest: run, attempts: eligible.attempts, budgetUsd, now: deps.now().toISOString(), pid, repos });
-    started = { attempts: eligible.attempts, next };
-    await deps.writeManifest(slug, next);
+    let bootstrapped = false;
     try {
+      await deps.writeManifest(slug, next);
       await resetStopFlags.call(deps, eligible.controlDir);
       const plistPath = join(eligible.controlDir, `${label}.plist`);
       const plist = renderPlist({
@@ -552,27 +598,32 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
         stderr: join(eligible.controlDir, 'launchd.err.log'),
         workingDir: paths.runDir,
       });
+      // the plist exists before the bootstrap: the old orchestrator's delayed bootout skips a job whose plist is there
       writeFileSync(plistPath, plist, { mode: 0o600 });
       chmodSync(plistPath, 0o600);
       bootstrapped = true; // from here a half-loaded job is possible
       const boot = await exec('launchctl', ['bootstrap', domain(deps.uid), plistPath]);
       if (boot.exitCode !== 0) throw new Error(`launchctl bootstrap failed (exit ${boot.exitCode}): ${(boot.stderr || boot.stdout).trim()}`);
-
-      const attempt = next.attempts?.at(-1)?.n ?? 0;
-      io.out(`Resumed ${slug} as attempt ${attempt} (${label}), budget $${budgetUsd.toFixed(2)} on top of $${run.costUsd.toFixed(2)} spent`);
-      io.out(`  log:    ${paths.orchestratorLog}`);
-      io.out(`  status: ${cli} status ${slug}`);
-      io.out(`  report: ${paths.reportMd}`);
-      return { label, plistPath, manifest: next, attempt };
+      return { plistPath, next, attempt: next.attempts?.at(-1)?.n ?? 0, run };
     } catch (err) {
       // The manifest says `launching` with an open attempt, and no orchestrator will ever close it: put the previous terminal
       // state back and keep the new attempt as a failed one. No attempt may stay open.
       const notes: string[] = [];
       if (bootstrapped) {
         try {
-          await bootout(exec, deps.uid, label); // we verified nothing was loaded under the lock, so anything loaded now is ours
-        } catch {
-          notes.push('the launchd job may still be loaded');
+          // we verified nothing was loaded under the lock, so anything loaded now is ours. Wait until it is gone before the
+          // manifest says "terminal" and the lock is released: a job that is still starting would find a finished run.
+          await bootout(exec, deps.uid, label);
+          let waited = 0;
+          let after = await readJob();
+          while (after.loaded && waited < waitMs) {
+            await sleep(500);
+            waited += 500;
+            after = await readJob();
+          }
+          if (after.loaded) notes.push('the launchd job is still loaded');
+        } catch (e) {
+          notes.push(`the launchd job may still be loaded (${e instanceof Error ? e.message : String(e)})`);
         }
       }
       try {
@@ -586,10 +637,21 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
       const base = err instanceof Error ? err.message : String(err);
       throw new Error(notes.length > 0 ? `${base} (resume rolled back; ${notes.join('; ')})` : `${base} (resume rolled back: ${slug} is ${run.state} again)`, { cause: err });
     }
+  };
+
+  let started: Awaited<ReturnType<typeof attemptResume>>;
+  try {
+    started = await attemptResume();
   } catch (err) {
     await lock.release();
     throw err;
   }
+  // after the try: a failing write to the terminal must not look like a failed resume of a healthy job
+  io.out(`Resumed ${slug} as attempt ${started.attempt} (${label}), budget $${budgetUsd.toFixed(2)} on top of $${started.run.costUsd.toFixed(2)} spent`);
+  io.out(`  log:    ${paths.orchestratorLog}`);
+  io.out(`  status: ${cli} status ${slug}`);
+  io.out(`  report: ${paths.reportMd}`);
+  return { label, plistPath: started.plistPath, manifest: started.next, attempt: started.attempt };
 }
 
 // ---------------------------------------------------------------------------
@@ -613,11 +675,28 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
   const slug = assertSlug(input.slug);
   const manifest = await deps.readManifest(slug);
   if (!manifest) throw new Error(`No run found for "${slug}"`);
+  const cli = cliInvocation(deps.nodePath);
+
+  /**
+   * A `launch` or `resume` of this very run keeps the lock (under the CLI's pid, or the orchestrator's) while it works. Marking
+   * the run stopped under it would be overwritten, or would hide a run that is about to start: refuse and let the user retry.
+   */
+  const refuseWhileStarting = async (): Promise<void> => {
+    const holder = await deps.lockHolder();
+    if (holder?.alive && (holder.slug === slug || (manifest.pid !== undefined && holder.pid === manifest.pid))) {
+      throw new Error(
+        `A launch or resume of "${slug}" is in progress (process ${holder.pid} holds the run lock), so it is not marked stopped now. ` +
+          `Wait a few seconds and run "${cli} stop ${slug}" again.`,
+      );
+    }
+  };
+
   if (isTerminalRunState(manifest.state)) {
     // A resumable run whose last attempt never got closed (a crash, or an older version's stop) would make `resume` refuse
     // with no way out: close that attempt here, as the manifest says it ended. A launch that never started has none to close.
     if (isResumableState(manifest.state) && !isNeverStartedFailure(manifest) && hasOpenAttempt(manifest)) {
       recordedControlDir(manifest, slug);
+      await refuseWhileStarting();
       const endedAt = manifest.endedAt ?? deps.now().toISOString();
       const attempts = closeLastAttempt(manifest, { endedAt, state: manifest.state, stopReason: manifest.stopReason });
       await deps.writeManifest(slug, { ...manifest, endedAt, attempts });
@@ -630,6 +709,10 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
   recordedControlDir(manifest, slug); // refuse a manifest whose recorded paths are not ours before touching launchd
   const label = recordedLaunchdLabel(manifest, slug);
   const job = await jobState(exec, deps.uid, label);
+  if (job.unknown) {
+    // "not loaded" is a claim about launchd; without a clear answer, marking a possibly live run stopped would be a guess
+    throw new Error(`Cannot tell whether the launchd job ${label} is running (${job.detail}), so ${slug} is not marked stopped. Check launchctl and try again.`);
+  }
   if (job.running) {
     const r = await exec('launchctl', ['kill', 'SIGTERM', `${domain(deps.uid)}/${label}`]);
     if (r.exitCode !== 0) throw new Error(`launchctl kill failed (exit ${r.exitCode}): ${(r.stderr || r.stdout).trim()}`);
@@ -638,6 +721,7 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
   }
   // Job not running: the orchestrator is gone (it crashed, or never started), so nobody will close the attempt or write the
   // report. Do it here: `crash -> stop -> resume` is the documented path, and resume refuses an open attempt.
+  await refuseWhileStarting();
   const endedAt = deps.now().toISOString();
   const attempts = closeLastAttempt(manifest, { endedAt, state: 'stopped', stopReason: STOPPED_AFTER_CRASH });
   await deps.writeManifest(slug, { ...manifest, state: 'stopped', endedAt, stopReason: STOPPED_AFTER_CRASH, attempts });
@@ -646,9 +730,8 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
     const r = await bootout(exec, deps.uid, label);
     if (r.exitCode !== 0) warnings.push(`warning: launchctl bootout of ${label} failed (exit ${r.exitCode}): ${(r.stderr || r.stdout).trim()}`);
   }
-  // only a lock whose holder is dead (or absent) is released; a live process keeps what it holds
-  if (await deps.lockIsFree()) await deps.releaseLock(slug);
-  else warnings.push('warning: the run lock is held by a live process, so it was left alone');
+  // releases the lock only when its holder is dead (or it is this run's stale one); a live process keeps what it holds
+  await deps.releaseLock(slug);
   let reportNote = '';
   try {
     reportNote = ` Report: ${await deps.writeReport(slug)}`;
@@ -682,9 +765,11 @@ export interface StatusInput {
  * What `status` shows as spend. A single-attempt run: the cumulative cost over the budget, as always. After a resume: the
  * open or last attempt's spend over that attempt's budget (the thresholds work the same way), and `attempt` says which one.
  */
-function costSummary(m: RunManifest): { spendUsd: number; budgetUsd: number; pct: number; attempt?: { n: number; budgetUsd: number } } {
+function costSummary(m: RunManifest): { spendUsd: number; budgetUsd: number; pct: number; attempt?: { n: number; budgetUsd: number; failedStarts: number } } {
   const attempts = attemptsOf(m);
-  const last = attempts.at(-1);
+  // a resume that was rolled back never ran: the attempt before it is still the current one (its budget is the run's again)
+  const real = attempts.filter((a) => a.stopReason !== RESUME_FAILED);
+  const last = real.at(-1);
   if (attempts.length <= 1 || !last) {
     return { spendUsd: m.costUsd, budgetUsd: m.budgetUsd, pct: m.budgetUsd > 0 ? (m.costUsd / m.budgetUsd) * 100 : 0 };
   }
@@ -694,7 +779,7 @@ function costSummary(m: RunManifest): { spendUsd: number; budgetUsd: number; pct
     spendUsd,
     budgetUsd: last.budgetUsd,
     pct: last.budgetUsd > 0 ? (spendUsd / last.budgetUsd) * 100 : 0,
-    attempt: { n: last.n, budgetUsd: last.budgetUsd },
+    attempt: { n: last.n, budgetUsd: last.budgetUsd, failedStarts: attempts.length - real.length },
   };
 }
 
@@ -718,7 +803,7 @@ async function printRunStatus(slug: string, deps: CliDeps, io: LauncherIo): Prom
   io.out(`Run:        ${slug}`);
   io.out(`State:      ${m.state}`);
   io.out(`Phase:      ${m.phase}`);
-  if (cost.attempt) io.out(`Attempt:    ${cost.attempt.n} (budget $${cost.attempt.budgetUsd.toFixed(2)})`);
+  if (cost.attempt) io.out(`Attempt:    ${cost.attempt.n} (budget $${cost.attempt.budgetUsd.toFixed(2)}${cost.attempt.failedStarts > 0 ? `; ${cost.attempt.failedStarts} later attempt${cost.attempt.failedStarts === 1 ? '' : 's'} failed to start` : ''})`);
   io.out(`Cost:       $${cost.spendUsd.toFixed(2)} / $${cost.budgetUsd.toFixed(2)} (${cost.pct.toFixed(1)}%)${cost.attempt ? `  run total $${m.costUsd.toFixed(2)}` : ''}`);
   io.out(`Sessions:   ${m.knownSessionIds.length}`);
   io.out(`Heartbeat:  ${heartbeat}`);

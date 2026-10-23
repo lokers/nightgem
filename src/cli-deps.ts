@@ -67,6 +67,13 @@ export interface LockHandle {
   release(): Promise<void>;
 }
 
+export interface LockHolder {
+  pid: number;
+  /** The run the holder was started for, when it recorded one. */
+  slug?: string;
+  alive: boolean;
+}
+
 export interface CliDeps {
   /** Home directory (tests point this at a temp dir). */
   home: string;
@@ -98,9 +105,8 @@ export interface CliDeps {
   /**
    * Read the frozen run context back from `<controlDir>/run-context.json` (validated). `resume` reuses it, so a continued run
    * keeps the rules it was planned with. Rejects when the file is missing or invalid.
-   * Optional only so that test fakes which never resume need not define it; `realCliDeps` always does, and `resume` refuses without it.
    */
-  readRunContext?(controlDir: string): Promise<RunContextSnapshot>;
+  readRunContext(controlDir: string): Promise<RunContextSnapshot>;
   /** The renderers `nightgem render` composes (tests fake them). The real ones: `realRenderers` from `src/render.ts`. */
   renderers: RenderRenderers;
 
@@ -113,14 +119,19 @@ export interface CliDeps {
   /**
    * Clear `softStop` and `hardStop` in `<controlDir>/control.json`, leaving the heartbeat alone (a missing or unreadable file
    * becomes the defaults). `launch` of a reused slug and `resume` call it before the job starts: the orchestrator fails the
-   * attempt when a stop flag of an earlier process is still set. Optional like `readRunContext`: `resume` refuses without it.
+   * attempt when a stop flag of an earlier process is still set.
    */
-  resetStopFlags?(controlDir: string): Promise<void> | void;
+  resetStopFlags(controlDir: string): Promise<void> | void;
 
   /** Take the single-run lock (A5). Throws if held. */
   acquireLock(slug: string): Promise<LockHandle>;
-  /** Force-release the lock held for `slug` (stale lock after `stop`). */
+  /**
+   * Release the lock held for `slug` (stale lock after `stop`), but only when its holder is dead: a live process keeps what it
+   * holds. A lock recorded for another slug is left alone.
+   */
   releaseLock(slug: string): Promise<void>;
+  /** Who holds the lock file, if anyone (read-only). `alive` is a liveness probe of the recorded pid. */
+  lockHolder(): Promise<LockHolder | undefined>;
   lockIsFree(): Promise<boolean>;
 
   /** Git baseline (head, branch, porcelain hash, stash count) for each repo path. */

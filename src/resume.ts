@@ -171,12 +171,12 @@ export interface WorktreeInspection {
 }
 
 const PSEUDO = /^(phase|wind-down):/;
-const WIND_DOWN_TAG = 'wind-down:';
 
 /**
  * The worktrees a resumed build relies on: the latest event of every task that was started (not `todo`, not a `phase:` or
  * `wind-down:` pseudo-task), and the `_integration` worktree of every repo that has a started `integration:<repo>` event. A
- * task a wind-down parked as `skipped` was never started, so it has no worktree to lose.
+ * `skipped` task was never started, whatever the reason (a wind-down's, or a dependent of a blocked task), so it has no
+ * worktree to lose; `blocked` tasks were started and are checked.
  */
 export function startedWorktreeTargets(events: readonly TaskEvent[]): { tasks: TaskEvent[]; integrations: TaskEvent[] } {
   const latest = new Map<string, TaskEvent>();
@@ -187,7 +187,7 @@ export function startedWorktreeTargets(events: readonly TaskEvent[]): { tasks: T
     if (e.state === 'todo') continue;
     if (e.id.startsWith('integration:')) integrations.push(e);
     else if (PSEUDO.test(e.id) || e.repo === '_run') continue;
-    else if (e.state === 'skipped' && e.blockedReason?.startsWith(WIND_DOWN_TAG) === true) continue;
+    else if (e.state === 'skipped') continue; // never started, whatever the reason (a blocked task's dependents are skipped too)
     else tasks.push(e);
   }
   return { tasks, integrations };

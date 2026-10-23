@@ -180,13 +180,14 @@ describe('startedWorktreeTargets', () => {
       task('c', 'todo'),
       task('d', 'blocked', { blockedReason: 'wind-down: unfinished' }),
       task('e', 'skipped', { blockedReason: 'wind-down: never started' }),
-      task('f', 'skipped', { blockedReason: 'not needed' }),
+      task('f', 'skipped', { blockedReason: 'dependency d is blocked' }),
+      task('g', 'blocked', { blockedReason: 'verify keeps failing' }),
       task('phase:build', 'running', { repo: '_run' }),
       task('wind-down:x', 'done'),
       task('integration:acme-api', 'running'),
       task('integration:acme-web', 'todo'),
     ]);
-    expect(tasks.map((t) => t.id).sort()).toEqual(['a', 'd', 'f']);
+    expect(tasks.map((t) => t.id).sort()).toEqual(['a', 'd', 'g']); // skipped (any reason) was never started; blocked was
     expect(integrations.map((t) => t.id)).toEqual(['integration:acme-api']);
   });
 });
@@ -239,6 +240,13 @@ describe('checkWorktrees', () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]!.problem).toMatch(/outside the run's worktree root|not absolute/);
     expect(seen).toEqual([]);
+  });
+
+  it('does not require a worktree for a skipped dependent of a blocked task, but still checks the blocked one', async () => {
+    const events = [task('a', 'blocked', { blockedReason: 'verify keeps failing' }), task('b', 'skipped', { blockedReason: 'depends on a' })];
+    const problems = await run(events, present({ [`${ROOT}/a`]: 'feat/a' }));
+    expect(problems).toEqual([]);
+    expect((await run(events, present({}))).map((p) => p.taskId)).toEqual(['a']);
   });
 
   it('refuses a task of a repo the run does not have', async () => {

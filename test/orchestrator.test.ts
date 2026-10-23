@@ -324,6 +324,41 @@ describe('lock handoff from the CLI (launchd starts us while the CLI may still b
     expect(existsSync(h.lockPath)).toBe(true);
   });
 
+  it('re-reads RUN.json under the lock: a run that went terminal while we waited is a no-op, with the lock released and nothing finalized', async () => {
+    const h = makeHarness();
+    holder(h, { slug: SLUG });
+    h.clock.setTimeout(() => {
+      // a `stop` (or a rolled-back resume) finished the run while the CLI still held the lock
+      writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), state: 'stopped', endedAt: '2026-01-01T00:00:00.000Z', stopReason: 'stopped-after-crash' }));
+      rmSync(h.lockPath);
+    }, 3_000);
+    const before = (): string => readFileSync(h.paths.runJson, 'utf8');
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'stopped', stopReason: 'stopped-after-crash', exitCode: 0, noop: true });
+    expect(h.startInputs).toHaveLength(0);
+    expect(h.reportStates).toEqual([]);
+    expect(h.cleanupCalls).toBe(0);
+    expect(existsSync(h.lockPath)).toBe(false);
+    expect(h.manifest().state).toBe('stopped');
+    expect(h.manifest().attempts).toBeUndefined(); // no attempt was written or closed
+    expect(before()).toBe(readFileSync(h.paths.runJson, 'utf8'));
+    expect(h.logs.some((l) => l.event === 'restart.noop' && l.fields.afterLock === true)).toBe(true);
+  });
+
+  it('runs the start-up assertions on the copy read under the lock', async () => {
+    const h = makeHarness();
+    holder(h, { slug: SLUG });
+    h.clock.setTimeout(() => {
+      // the resume transition landed after our first read: an attempt list whose last attempt is closed breaks the invariant
+      writeManifest(h.paths.runJson, RunManifest.parse({ ...h.manifest(), startedAt: '2026-01-01T00:00:00.000Z', attempts: [{ ...OLD, budgetUsd: 10 }] }));
+      rmSync(h.lockPath);
+    }, 3_000);
+    const res = await h.run();
+    expect(res).toMatchObject({ state: 'failed', stopReason: 'attempt-invariant' });
+    expect(h.startInputs).toHaveLength(0);
+    expect(h.manifest().attempts![0]).toEqual({ ...OLD, budgetUsd: 10 });
+  });
+
   it('a lock held by a different live run is lock-held at once (no waiting)', async () => {
     const h = makeHarness();
     holder(h, { slug: 'some-other-run' });
@@ -2013,6 +2048,22 @@ describe('resume: phases (AD8)', () => {
     await h.run();
     expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
     expect(existsSync(join(h.paths.runDir, 'run-complete-attempt1.json'))).toBe(true);
+  });
+
+  it('a resume that was rolled back (resume-failed) is not the previous attempt: the soft-stop defence and the archive suffix look past it', async () => {
+    const { h } = resumed({}, [planDone, buildDone, reviewDone]);
+    seedReviewMarkers(h);
+    const failed = { n: 2, startedAt: '2026-01-01T02:00:00.000Z', endedAt: '2026-01-01T02:00:05.000Z', state: 'failed', stopReason: 'resume-failed', budgetUsd: 10, costAtStartUsd: 4, costUsd: 0 };
+    writeManifest(
+      h.paths.runJson,
+      RunManifest.parse({ ...h.manifest(), attempts: [{ ...OLD, stopReason: 'budget-soft' }, failed, { ...OPEN, n: 3 }] }),
+    );
+    await h.run();
+    // attempt 1 wound down, so its review does not count even though attempt 2 (never ran) has another stop reason
+    expect(kinds(h)).toEqual(['phase-review', 'phase-report']);
+    expect(existsSync(join(h.paths.runDir, 'run-complete-attempt1.json'))).toBe(true);
+    expect(existsSync(join(h.paths.runDir, 'run-complete-attempt2.json'))).toBe(false);
+    expect(h.logs.find((l) => l.event === 'attempt.start')?.fields).toMatchObject({ attempt: 3 });
   });
 
   it('a phase:report done before the offset is ignored: the report runs and only a done line written after the offset ends it', async () => {

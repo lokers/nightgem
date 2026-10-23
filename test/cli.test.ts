@@ -100,6 +100,7 @@ function makeDeps(over: Partial<CliDeps> = {}): CliDeps {
       return { release: async () => void log.push('deps:release') };
     },
     releaseLock: async () => void log.push('deps:releaseLock'),
+    lockHolder: () => realCliDeps(home).lockHolder(),
     lockIsFree: async () => true,
     buildBaseline: async (paths) => {
       log.push('deps:buildBaseline');
@@ -929,7 +930,7 @@ function writeLockFile(pid: number, slug = SLUG): string {
 /** Deps with the REAL lock (state.ts) under the temp HOME. */
 function realLockDeps(over: Partial<CliDeps> = {}): CliDeps {
   const real = realCliDeps(home);
-  return makeDeps({ acquireLock: (s) => real.acquireLock(s), releaseLock: (s) => real.releaseLock(s), lockIsFree: () => real.lockIsFree(), ...over });
+  return makeDeps({ acquireLock: (s) => real.acquireLock(s), releaseLock: (s) => real.releaseLock(s), lockHolder: () => real.lockHolder(), lockIsFree: () => real.lockIsFree(), ...over });
 }
 
 describe('stop on a run whose job is not running (crash -> stop -> resume)', () => {
@@ -988,14 +989,78 @@ describe('stop on a run whose job is not running (crash -> stop -> resume)', () 
     expect(existsSync(lockPath)).toBe(false);
   });
 
-  it('leaves a lock held by a live process alone, and says so', async () => {
+  describe('a live lock holder (R2)', () => {
+    const live = (over: Record<string, unknown> = {}): string => {
+      const lockPath = defaultLockPath(home);
+      mkdirSync(join(lockPath, '..'), { recursive: true });
+      writeFileSync(lockPath, `${JSON.stringify({ pid: process.ppid, token: 'tok', ts: NOW.toISOString(), slug: SLUG, ...over })}\n`);
+      return lockPath;
+    };
+
+    it('a live holder for this slug means a launch or resume is in progress: refuse, write nothing', async () => {
+      const before = seedManifest({ attempts: [openAttempt] });
+      const lockPath = live();
+      await expect(stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: io() })).rejects.toThrow(/launch or resume of "demo-run" is in progress.*Wait a few seconds/s);
+      expect(manifests.get(SLUG)).toEqual(before);
+      expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+      expect(existsSync(lockPath)).toBe(true);
+    });
+
+    it('a live holder at manifest.pid (an old lock with no slug) means the same', async () => {
+      seedManifest({ attempts: [openAttempt], pid: process.ppid });
+      live({ slug: undefined });
+      await expect(stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: io() })).rejects.toThrow(/in progress/);
+      expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+    });
+
+    it('it also protects the repair of a stopped run whose attempt is open', async () => {
+      seedManifest({ state: 'stopped', endedAt: '2026-10-21T21:50:00.000Z', attempts: [openAttempt] });
+      live();
+      await expect(stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec(), io: io() })).rejects.toThrow(/in progress/);
+      expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+    });
+
+    it('a live holder for another run does not block, and its lock is left alone', async () => {
+      seedManifest({ attempts: [openAttempt] });
+      const lockPath = live({ slug: 'other-run' });
+      await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+      expect(manifests.get(SLUG)!.state).toBe('stopped');
+      expect(existsSync(lockPath)).toBe(true);
+    });
+
+    it('a dead holder for this slug does not block and is released', async () => {
+      seedManifest({ attempts: [openAttempt], pid: DEAD_PID });
+      const lockPath = live({ pid: DEAD_PID });
+      await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+      expect(manifests.get(SLUG)!.state).toBe('stopped');
+      expect(existsSync(lockPath)).toBe(false);
+    });
+
+    it('a running job is still SIGTERMed even though the orchestrator holds the lock for this slug', async () => {
+      seedManifest({ attempts: [openAttempt] });
+      live();
+      expect(await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'running' }), io: io() })).toBe('signalled');
+    });
+  });
+
+  it.each([
+    ['launchctl missing', { stdout: '', stderr: 'spawn launchctl ENOENT', exitCode: 127 }],
+    ['a permission error', { stdout: '', stderr: 'Operation not permitted', exitCode: 1 }],
+  ])('refuses to mark the run stopped when launchctl print fails with %s (unknown, not "not loaded")', async (_n, failure) => {
+    const before = seedManifest({ attempts: [openAttempt] });
+    const exec: ExecFn = async (cmd, args) => (cmd === 'launchctl' && args[0] === 'print' ? failure : makeExec()(cmd, args));
+    await expect(stop({ slug: SLUG, deps: makeDeps(), exec, io: io() })).rejects.toThrow(/Cannot tell whether the launchd job .* is running/);
+    expect(manifests.get(SLUG)).toEqual(before);
+    expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+  });
+
+  it.each([
+    ['exit 113', { stdout: '', stderr: '', exitCode: 113 }],
+    ['the "could not find service" wording', { stdout: '', stderr: 'Could not find service "x" in domain for user gui: 501', exitCode: 1 }],
+  ])('treats %s as not loaded', async (_n, failure) => {
     seedManifest({ attempts: [openAttempt] });
-    const lockPath = writeLockFile(process.ppid);
-    const errs: string[] = [];
-    await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: { out: (l) => void lines.push(l), err: (l) => void errs.push(l) } });
-    expect(existsSync(lockPath)).toBe(true);
-    expect(errs.join('\n')).toMatch(/lock is held by a live process/);
-    expect(manifests.get(SLUG)!.state).toBe('stopped');
+    const exec: ExecFn = async (cmd, args) => (cmd === 'launchctl' && args[0] === 'print' ? failure : makeExec()(cmd, args));
+    expect(await stop({ slug: SLUG, deps: makeDeps(), exec, io: io() })).toBe('stopped');
   });
 
   it('a failing report does not undo the stop', async () => {
@@ -1057,6 +1122,23 @@ describe('status with attempts', () => {
     const out = lines.join('\n');
     expect(out).toMatch(/^Attempt:    2 \(budget \$5\.00\)$/m);
     expect(out).toContain('Cost:       $4.00 / $5.00 (80.0%)  run total $44.50');
+  });
+
+  it('after a rolled-back resume shows the last attempt that really ran as current, and says a later one failed to start', async () => {
+    seedManifest({
+      state: 'stopped',
+      budgetUsd: 40,
+      costUsd: 44.5,
+      attempts: [
+        { n: 1, startedAt: '2026-10-21T21:00:00.000Z', endedAt: '2026-10-21T21:50:00.000Z', state: 'stopped', budgetUsd: 40, costAtStartUsd: 0, costUsd: 30 },
+        { n: 2, startedAt: '2026-10-21T22:00:00.000Z', endedAt: '2026-10-21T22:10:00.000Z', state: 'stopped', budgetUsd: 40, costAtStartUsd: 30, costUsd: 14.5 },
+        { n: 3, startedAt: '2026-10-21T22:20:00.000Z', endedAt: '2026-10-21T22:20:05.000Z', state: 'failed', stopReason: 'resume-failed', budgetUsd: 7, costAtStartUsd: 44.5, costUsd: 0 },
+      ],
+    });
+    await status({ slug: SLUG, deps: makeDeps(), io: io() });
+    const out = lines.join('\n');
+    expect(out).toMatch(/^Attempt:    2 \(budget \$40\.00; 1 later attempt failed to start\)$/m);
+    expect(out).toContain('Cost:       $14.50 / $40.00 (36.3%)  run total $44.50');
   });
 
   it('falls back to the spend since the attempt began when no attempt cost is recorded yet', async () => {

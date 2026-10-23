@@ -54,9 +54,12 @@ function makeDeps(over: Partial<CliDeps> = {}): CliDeps {
     readManifest: async () => undefined,
     writeManifest: forbidden('writeManifest'),
     writeRunContext: forbidden('writeRunContext'),
+    readRunContext: forbidden('readRunContext'),
+    resetStopFlags: forbidden('resetStopFlags'),
     readControlFlags: async () => ({ softStop: false, hardStop: false, heartbeatTs: 0 }),
     acquireLock: forbidden('acquireLock'),
     releaseLock: forbidden('releaseLock'),
+    lockHolder: async () => undefined,
     lockIsFree: async () => true,
     buildBaseline: forbidden('buildBaseline'),
     writeReport: forbidden('writeReport'),
@@ -205,6 +208,8 @@ describe('resume', () => {
   let bootstrapExit: number;
   let unloaded: boolean;
   let power: string;
+  let lingering: number;
+  let bootstrapSeen: boolean;
 
   const p = () => runPaths(SLUG, { home, workspaceRoot });
   const lockPath = () => defaultLockPath(home);
@@ -272,6 +277,10 @@ describe('resume', () => {
       if (cmd === '/bin/sh') return ok(`/opt/homebrew/bin/${args[1]?.replace('command -v ', '')}\n`);
       if (cmd === 'launchctl' && args[0] === 'print') {
         events.push('print');
+        if (bootstrapSeen && lingering > 0) {
+          lingering--;
+          return ok('state = not running\n');
+        }
         if (job === 'absent' || (unloaded && job !== 'sticky')) return { stdout: '', stderr: 'not found', exitCode: 113 };
         return ok(job === 'running' ? 'state = running\n' : 'state = not running\n');
       }
@@ -282,6 +291,7 @@ describe('resume', () => {
       }
       if (cmd === 'launchctl' && args[0] === 'bootstrap') {
         events.push(`bootstrap ${args[1]}`);
+        bootstrapSeen = true;
         return { stdout: '', stderr: bootstrapExit ? 'Bootstrap failed: 5' : '', exitCode: bootstrapExit };
       }
       return { stdout: '', stderr: `unexpected: ${key}`, exitCode: 1 };
@@ -310,6 +320,7 @@ describe('resume', () => {
         return real.acquireLock(slug);
       },
       releaseLock: (slug) => real.releaseLock(slug),
+      lockHolder: () => real.lockHolder(),
       lockIsFree: () => real.lockIsFree(),
       buildBaseline: async (paths) => {
         events.push('buildBaseline');
@@ -340,6 +351,8 @@ describe('resume', () => {
     unloaded = false;
     bootstrapExit = 0;
     power = 'AC Power';
+    lingering = 0;
+    bootstrapSeen = false;
   });
 
   describe('the happy path', () => {
@@ -575,6 +588,83 @@ describe('resume', () => {
     });
   });
 
+  describe('the previous orchestrator\'s delayed bootout (R1)', () => {
+    let sleeps: number[];
+    let tick: number;
+    const clock = () => tick;
+    const goWait = (over: Partial<Parameters<typeof resume>[0]> = {}) => go({ sleep: async (ms) => void sleeps.push(ms), clock, ...over });
+    beforeEach(() => {
+      sleeps = [];
+      tick = 1_000_000;
+    });
+
+    it('waits until 5 s after the lock when the job was loaded, looks again, and only then writes and bootstraps', async () => {
+      seed();
+      job = 'loaded';
+      await goWait();
+      expect(sleeps).toEqual([5_000]);
+      const seq = events.filter((e) => e === 'acquireLock' || e.startsWith('bootout') || e === 'print' || e.startsWith('write') || e.startsWith('bootstrap'));
+      const lastPrintBeforeWrite = seq.slice(0, seq.indexOf('write:launching')).lastIndexOf('print');
+      expect(lastPrintBeforeWrite).toBeGreaterThan(seq.indexOf(`bootout gui/501/dev.nightgem.${SLUG}`));
+      expect(seq.indexOf('bootstrap gui/501')).toBeGreaterThan(seq.indexOf('write:launching'));
+    });
+
+    it('waits when the run ended less than 30 s ago, even with no job loaded', async () => {
+      seed({ endedAt: new Date(NOW.getTime() - 10_000).toISOString() });
+      await goWait();
+      expect(sleeps).toEqual([5_000]);
+    });
+
+    it('waits only for what is left of the 5 s, and not at all when the gates already took that long', async () => {
+      seed({ endedAt: new Date(NOW.getTime() - 10_000).toISOString() });
+      let calls = 0;
+      await goWait({ clock: () => (++calls === 1 ? 1_000_000 : 1_003_000) });
+      expect(sleeps).toEqual([2_000]);
+
+      seed({ endedAt: new Date(NOW.getTime() - 10_000).toISOString() });
+      unloaded = false;
+      sleeps = [];
+      rmSync(lockPath()); // the first resume's lock
+      calls = 0;
+      await goWait({ clock: () => (++calls === 1 ? 1_000_000 : 1_009_000) });
+      expect(sleeps).toEqual([]);
+    });
+
+    it('does not wait for an old terminal run with no job loaded', async () => {
+      seed(); // ended 10 minutes before NOW
+      await goWait();
+      expect(sleeps).toEqual([]);
+      expect(manifest!.state).toBe('launching');
+    });
+
+    it('refuses, writing nothing, when the job is loaded again after the wait', async () => {
+      const before = seed({ endedAt: new Date(NOW.getTime() - 5_000).toISOString() });
+      const sleep = async (ms: number) => {
+        sleeps.push(ms);
+        job = 'running'; // someone bootstrapped meanwhile
+      };
+      await expect(goWait({ sleep })).rejects.toThrow(/running again after the previous run ended/);
+      expect(writes).toEqual([]);
+      expect(manifest).toEqual(before);
+      expect(events.some((e) => e.startsWith('bootstrap'))).toBe(false);
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('treats a launchctl failure that is not "not found" as unknown and refuses', async () => {
+      const before = seed();
+      const exec: ExecFn = async (cmd, args) => (cmd === 'launchctl' && args[0] === 'print' ? { stdout: '', stderr: 'Operation not permitted', exitCode: 1 } : rexec()(cmd, args));
+      await expect(go({ exec })).rejects.toThrow(/Cannot tell whether the launchd job .* is loaded/);
+      expect(manifest).toEqual(before);
+      expect(writes).toEqual([]);
+    });
+
+    it('the running-job refusal says to wait and retry if the run just finished', async () => {
+      seed();
+      job = 'running';
+      await expect(go()).rejects.toThrow(/If the run just finished, wait a few seconds and retry/);
+    });
+  });
+
   describe('the run lock', () => {
     it('takes over a lock held by a dead pid', async () => {
       seed();
@@ -709,9 +799,24 @@ describe('resume', () => {
       }
     });
 
+    it('a failed run with a skipped dependent that has no worktree is eligible', async () => {
+      seed({ state: 'failed' });
+      makeWorktree(taskWorktree(repoPath(), SLUG, 't1'), 'feat/t1');
+      writeTasks([ev('t1', 'blocked', { blockedReason: 'verify keeps failing' }), ev('t2', 'skipped', { blockedReason: 'depends on t1' })]);
+      await go();
+      expect(manifest!.state).toBe('launching');
+    });
+
+    it('still checks a blocked task', async () => {
+      const before = seed({ state: 'failed' });
+      writeTasks([ev('t1', 'blocked', { blockedReason: 'verify keeps failing' })]);
+      await expect(go()).rejects.toThrow(/t1: .*the worktree is missing/);
+      expectUntouched(before);
+    });
+
     it('does not check tasks that never started', async () => {
       seed();
-      writeTasks([ev('t1', 'todo'), ev('t2', 'skipped', { blockedReason: 'wind-down: never started' })]);
+      writeTasks([ev('t1', 'todo'), ev('t2', 'skipped', { blockedReason: 'wind-down: never started' }), ev('t3', 'skipped', { blockedReason: 'not needed' })]);
       await go();
       expect(manifest!.state).toBe('launching');
     });
@@ -851,20 +956,61 @@ describe('resume', () => {
       expect(existsSync(lockPath())).toBe(false);
     });
 
-    it('does not roll back when the manifest write itself fails: nothing was written', async () => {
+    it('rolls back even when the manifest write itself fails, because it may have landed', async () => {
       const before = seed();
       let n = 0;
       const deps = rdeps({
-        writeManifest: async () => {
-          n++;
-          throw new Error('disk full');
+        writeManifest: async (_s, m) => {
+          events.push(`write:${m.state}`);
+          if (++n === 1) {
+            manifest = m; // the file was replaced, then the call failed (a fsync error, say)
+            throw new Error('disk full');
+          }
+          manifest = m;
         },
       });
-      await expect(go({ deps })).rejects.toThrow('disk full');
-      expect(n).toBe(1);
-      expect(manifest).toEqual(before);
+      await expect(go({ deps })).rejects.toThrow(/disk full.*rolled back/s);
+      expect(n).toBe(2);
+      expect(manifest!.state).toBe(before.state);
+      expect(openAttempts(manifest)).toEqual([]);
+      expect(manifest!.attempts!.at(-1)).toMatchObject({ n: 2, state: 'failed', stopReason: 'resume-failed' });
       expect(existsSync(lockPath())).toBe(false);
-      expect(events.some((e) => e.startsWith('bootstrap') || e === 'resetStopFlags')).toBe(false);
+      expect(events.some((e) => e.startsWith('bootstrap') || e === 'resetStopFlags' || e.startsWith('bootout'))).toBe(false);
+    });
+
+    it('waits until the job is really gone before it restores the manifest and releases the lock', async () => {
+      seed();
+      bootstrapExit = 5;
+      lingering = 3;
+      const sleeps: number[] = [];
+      await expect(go({ sleep: async (ms) => void sleeps.push(ms) })).rejects.toThrow(/rolled back/);
+      expect(sleeps.filter((ms) => ms === 500)).toHaveLength(3);
+      const lastPrint = events.lastIndexOf('print');
+      expect(events.indexOf('write:aborted-budget')).toBeGreaterThan(lastPrint);
+      expect(events.indexOf(`bootout gui/501/dev.nightgem.${SLUG}`)).toBeLessThan(lastPrint);
+    });
+
+    it('says so when the job is still loaded after the rollback wait', async () => {
+      seed();
+      bootstrapExit = 5;
+      lingering = 1000;
+      await expect(go({ sleep: async () => {}, bootoutWaitMs: 1000 })).rejects.toThrow(/rolled back; the launchd job is still loaded/);
+      expect(manifest!.state).toBe('aborted-budget');
+      expect(existsSync(lockPath())).toBe(false);
+    });
+
+    it('prints the success lines after the rollback scope: a failing terminal never boots out a healthy job', async () => {
+      seed();
+      const out = (): never => {
+        throw new Error('EPIPE');
+      };
+      await expect(go({ io: { out } })).rejects.toThrow('EPIPE');
+      expect(manifest!.state).toBe('launching');
+      expect(openAttempts(manifest)).toHaveLength(1);
+      expect(writes).toHaveLength(1);
+      expect(events.filter((e) => e.startsWith('bootout'))).toEqual([]);
+      expect(events.filter((e) => e.startsWith('bootstrap'))).toHaveLength(1);
+      expect(existsSync(lockPath())).toBe(true); // handed over to the orchestrator
     });
   });
 });

@@ -71,6 +71,7 @@ import {
 } from './contracts.ts';
 import { redactString, redactValue, type Clock, type EventPump, type EventPumpOptions } from './events.ts';
 import type { RunPaths } from './paths.ts';
+import { RESUME_FAILED } from './resume.ts';
 import type { PromptVars } from './prompts.ts';
 import type { StartRunServerInput } from './server.ts';
 import {
@@ -541,6 +542,20 @@ class Run {
       this.log('lock.failed', { error: errMsg(err) });
       return { state: manifest.state, stopReason: 'lock-held', exitCode: 1, noop: true, error: errMsg(err) };
     }
+    // The first read was before the lock: while we waited for it (a CLI that handed over, or a `stop`/rollback that ran in
+    // between) RUN.json may have changed. Everything below works on a copy read under the lock.
+    try {
+      manifest = this.st.readManifest(this.mpath);
+    } catch (err) {
+      this.releaseLock?.();
+      this.log('manifest.unreadable', { error: errMsg(err) });
+      return { state: 'failed', stopReason: 'manifest-unreadable', exitCode: 1, noop: true, error: errMsg(err) };
+    }
+    if (isRestartNoop(manifest)) {
+      this.releaseLock?.();
+      this.log('restart.noop', { state: manifest.state, afterLock: true });
+      return { state: manifest.state, ...(manifest.stopReason ? { stopReason: manifest.stopReason } : {}), exitCode: 0, noop: true };
+    }
     this.manifestState = manifest;
 
     try {
@@ -666,7 +681,8 @@ class Run {
     this.taskOffset = read.items.length;
 
     const attempts = attemptsOf(manifest);
-    const prev = attempts.length > 1 ? attempts.at(-2) : undefined;
+    // The attempt this one continues: the last closed one before it, skipping a resume that was rolled back (it never ran)
+    const prev = attempts.slice(0, -1).filter((a) => a.endedAt !== undefined && a.stopReason !== RESUME_FAILED).at(-1);
     const done = (phase: Phase): boolean => {
       if (phase === 'report') return false;
       if (!read.items.some((t) => t.id === `phase:${phase}` && t.state === 'done')) return false;

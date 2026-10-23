@@ -629,10 +629,21 @@ describe('deps construct without side effects', () => {
     expect(detached).toHaveLength(1);
     expect(detached[0]![0]).toBe('/bin/sh');
     // the label is a positional argument of `sh -c`, never part of the script text
-    expect(detached[0]![1]).toEqual(['-c', expect.stringContaining('launchctl bootout "gui/'), 'sh', m.launchdLabel]);
+    expect(detached[0]![1]).toEqual(['-c', expect.stringContaining('launchctl bootout "gui/'), 'sh', m.launchdLabel, plist]);
     expect(detached[0]![1][1]).not.toContain(m.launchdLabel);
+    expect(detached[0]![1][1]).not.toContain(plist);
     expect(detached[0]![1][1]).toContain(`gui/${process.getuid?.() ?? 501}/$1`);
+    // a job bootstrapped again meanwhile (resume writes its plist first) is not ours to boot out
+    expect(detached[0]![1][1]).toMatch(/^sleep 2; \[ -e "\$2" \] \|\| \/bin\/launchctl bootout /);
     await d.cleanupLaunchd(); // already gone: still fine
+
+    // run the real script with the sleep and launchctl swapped for harmless stand-ins: the guard decides
+    const script = detached[0]![1][1]!.replace('sleep 2', 'true').replace('/bin/launchctl', 'echo').replace(' >/dev/null 2>&1', '');
+    const run = (plistPath: string) => execFileSync('/bin/sh', ['-c', script, 'sh', m.launchdLabel, plistPath], { encoding: 'utf8' });
+    // our own finalize deleted the plist, nothing replaced it: the job is ours to boot out
+    expect(run(plist)).toContain(`bootout gui/${process.getuid?.() ?? 501}/${m.launchdLabel}`);
+    writeFileSync(plist, '<plist/>'); // a resume wrote its plist before bootstrapping
+    expect(run(plist)).toBe('');
   });
 
   it('cleanupLaunchd accepts a legacy-style label', async () => {
@@ -640,7 +651,7 @@ describe('deps construct without side effects', () => {
     const detached: Array<[string, string[]]> = [];
     const d = realOrchestratorDeps(SLUG, home, { env: {}, detach: (c, a) => void detached.push([c, a]) });
     await d.cleanupLaunchd();
-    expect(detached[0]![1].at(-1)).toBe(m.launchdLabel);
+    expect(detached[0]![1].slice(-2)).toEqual([m.launchdLabel, join(d.paths.controlDir, `${m.launchdLabel}.plist`)]);
   });
 
   it.each([
@@ -686,18 +697,44 @@ describe('deps construct without side effects', () => {
 });
 
 describe('lock handoff: what the CLI leaves behind for the orchestrator', () => {
-  it('the CLI lock records the run slug and pid; lockIsFree reflects the holder; releaseLock(slug) frees it', async () => {
+  it('the CLI lock records the run slug and pid; lockIsFree and lockHolder reflect the holder; a live holder is never force-released', async () => {
     const d = realCliDeps(home, { env: {} });
+    expect(await d.lockHolder()).toBeUndefined();
     const lock = await d.acquireLock(SLUG);
     const info = readLockInfo(defaultLockPath(home));
     expect(info).toMatchObject({ pid: process.pid, slug: SLUG });
+    expect(await d.lockHolder()).toEqual({ pid: process.pid, slug: SLUG, alive: true });
     expect(await d.lockIsFree()).toBe(false); // the holder (this process) is alive
     await d.releaseLock('some-other-run'); // not ours: untouched
+    await d.releaseLock(SLUG); // ours by slug, but its holder is alive: a live process keeps what it holds
     expect(existsSync(defaultLockPath(home))).toBe(true);
-    await d.releaseLock(SLUG);
+    await lock.release(); // the holder lets go itself
     expect(existsSync(defaultLockPath(home))).toBe(false);
     await lock.release(); // idempotent
     expect(await d.lockIsFree()).toBe(true);
+    expect(await d.lockHolder()).toBeUndefined();
+  });
+
+  it('releaseLock(slug) frees a lock whose holder is dead, and only that run\'s', async () => {
+    mkdirSync(dirname(defaultLockPath(home)), { recursive: true });
+    const d = realCliDeps(home, { env: {} });
+    const write = (slug?: string) =>
+      writeFileSync(defaultLockPath(home), `${JSON.stringify({ pid: 999_999, token: 't', ts: new Date().toISOString(), ...(slug ? { slug } : {}) })}\n`);
+    write(SLUG);
+    expect(await d.lockHolder()).toEqual({ pid: 999_999, slug: SLUG, alive: false });
+    await d.releaseLock('some-other-run');
+    expect(existsSync(defaultLockPath(home))).toBe(true);
+    await d.releaseLock(SLUG);
+    expect(existsSync(defaultLockPath(home))).toBe(false);
+    write(); // an old-format lock with no slug
+    await d.releaseLock(SLUG);
+    expect(existsSync(defaultLockPath(home))).toBe(false);
+  });
+
+  it('lockHolder reports an unparsable lock file as no holder', async () => {
+    mkdirSync(dirname(defaultLockPath(home)), { recursive: true });
+    writeFileSync(defaultLockPath(home), 'garbage');
+    expect(await realCliDeps(home, { env: {} }).lockHolder()).toBeUndefined();
   });
 
   it('a lock whose holder died (the exited CLI) counts as free', async () => {

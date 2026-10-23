@@ -642,8 +642,13 @@ export function realCliDeps(home: string = homedir(), opts: WiringOptions = {}):
       return { release: async () => release() };
     },
     async releaseLock(slug) {
+      // only a lock whose holder is gone: a live process keeps what it holds (the caller decides what to tell the user)
       const info = readLockInfo(lockPath);
-      if (info && (info.slug === undefined || info.slug === slug)) releaseLock(lockPath, info.pid);
+      if (info && !isPidAlive(info.pid) && (info.slug === undefined || info.slug === slug)) releaseLock(lockPath, info.pid);
+    },
+    async lockHolder() {
+      const info = readLockInfo(lockPath);
+      return info === undefined ? undefined : { pid: info.pid, ...(info.slug === undefined ? {} : { slug: info.slug }), alive: isPidAlive(info.pid) };
     },
     async lockIsFree() {
       const info = readLockInfo(lockPath);
@@ -1437,8 +1442,11 @@ export function realOrchestratorDeps(slug: string, home: string = homedir(), opt
       }
       // `launchctl bootout` of our own job waits for this process to exit: detach it with a short delay and return.
       const uid = process.getuid?.() ?? 501;
-      // the label reaches the shell only as a positional argument ($1), never inside the script text
-      (opts.detach ?? defaultDetach)('/bin/sh', ['-c', `sleep 2; /bin/launchctl bootout "gui/${uid}/$1" >/dev/null 2>&1`, 'sh', label]);
+      // the label ($1) and the plist path ($2) reach the shell only as positional arguments, never inside the script text.
+      // A `resume` (or `launch`) writes the plist again before it bootstraps: if it exists by the time the sleep ends, the job
+      // is a newer one and not ours to boot out.
+      const plistPath = join(dir, `${label}.plist`);
+      (opts.detach ?? defaultDetach)('/bin/sh', ['-c', `sleep 2; [ -e "$2" ] || /bin/launchctl bootout "gui/${uid}/$1" >/dev/null 2>&1`, 'sh', label, plistPath]);
     },
   };
 }
