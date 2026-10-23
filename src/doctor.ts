@@ -400,8 +400,17 @@ export function detectSlim(input: { home: string; fs: EnvironmentFs }): SlimStat
   const entry = readPluginSpecs(text).find((p) => p === SLIM_PACKAGE || p.startsWith(`${SLIM_PACKAGE}@`));
   if (entry === undefined) return { status: 'absent', detail: `${SLIM_PACKAGE} is not in the "plugin" list of ${file} (install it: see the README prerequisites)` };
   const specVersion = entry.includes('@') ? entry.slice(entry.indexOf('@') + 1) : undefined;
-  const version = cachedSlimVersion(home, specVersion, fs) ?? (specVersion && SEMVER_RE.test(specVersion) ? specVersion : undefined);
-  if (version === undefined) return { status: 'uncached', detail: `${entry} is configured but not in OpenCode's cache. Start OpenCode once (the TUI, or \`opencode run "hi"\`) so it downloads the plugin, then rerun doctor` };
+  const cached = cachedSlimVersion(home, specVersion, fs);
+  if (cached === undefined) {
+    // not downloaded yet: hard, pinned or not. A pinned semver is still reported as the version the spec asks for.
+    const pinned = specVersion && SEMVER_RE.test(specVersion) ? specVersion : undefined;
+    return {
+      status: 'uncached',
+      ...(pinned ? { version: pinned } : {}),
+      detail: `${entry} is configured but not in OpenCode's cache. Start OpenCode once (the TUI, or \`opencode run "hi"\`) so it downloads the plugin, then rerun doctor`,
+    };
+  }
+  const version = cached;
   const major = Number(version.split('.')[0]);
   if (major !== EXPECTED_SLIM_MAJOR) {
     return { status: 'wrong-major', version, detail: `${SLIM_PACKAGE} ${version} found, major ${EXPECTED_SLIM_MAJOR} required` };

@@ -389,9 +389,23 @@ describe('environment checks (explicit home / env / fs)', () => {
       expect(slimCheck({ status: 'unknown', detail: 'cannot read x' })).toMatchObject({ ok: false, hard: false });
     });
 
-    it('a pinned spec that is not cached yet falls back to the spec version', () => {
+    it('a pinned spec that is not cached yet is a hard FAIL too, and still reports the pinned version', () => {
       writeOpencodeJson({ plugin: ['oh-my-opencode-slim@3.0.4'] });
-      expect(detectSlim({ home, fs: nodeFs })).toMatchObject({ status: 'ok', version: '3.0.4' });
+      const status = detectSlim({ home, fs: nodeFs });
+      expect(status).toMatchObject({ status: 'uncached', version: '3.0.4' });
+      expect(slimCheck(status)).toMatchObject({ ok: false, hard: true, detail: expect.stringContaining('opencode run "hi"') });
+      writeProfile();
+      expect(check('oh-my-opencode-slim')!.detail).toContain('rerun doctor');
+    });
+
+    it('a pinned spec that is cached keeps its behaviour: ok on major 3, hard on another major', () => {
+      writeOpencodeJson({ plugin: ['oh-my-opencode-slim@3.0.4'] });
+      cachePkg(slimDir('oh-my-opencode-slim@3.0.4'), '3.0.4');
+      expect(slimCheck(detectSlim({ home, fs: nodeFs }))).toMatchObject({ ok: true });
+      writeOpencodeJson({ plugin: ['oh-my-opencode-slim@2.9.0'] });
+      cachePkg(slimDir('oh-my-opencode-slim@2.9.0'), '2.9.0');
+      expect(detectSlim({ home, fs: nodeFs })).toMatchObject({ status: 'wrong-major', version: '2.9.0' });
+      expect(slimCheck(detectSlim({ home, fs: nodeFs }))).toMatchObject({ ok: false, hard: true });
     });
 
     it('no global opencode.json at all means slim is not enabled: a hard failure (SC2)', () => {
