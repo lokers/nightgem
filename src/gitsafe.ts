@@ -7,14 +7,15 @@
  * helpers, ...). A plain `git status` from the orchestrator would then run an agent-planted program with full rights.
  *
  * What this does, per call:
- * 1. A trusted environment: no system config, no pager, no prompts, no external diff, an allow-list of transports
+ * 1. A trusted environment: no pager, no prompts, no external diff, an allow-list of transports
  *    (no `ext::`), and a fixed `GIT_SSH_COMMAND` unless the caller sets one (it beats `core.sshCommand`).
  * 2. Fixed `-c` overrides for every program-running setting that has one fixed name (fsmonitor, hooks, pager, ...).
  * 3. Dynamic `-c` overrides: the keys the repo's own config (`local` and `worktree` scope, includes followed) defines
  *    under a driver or remote name (`filter.<d>.*`, `diff.<d>.*`, `merge.<d>.driver`, `pager.<cmd>`, credential
  *    helpers) are read with `git config --list --show-scope -z` (reading config runs nothing) and set back to
- *    the trusted value: the one in the global config, else an inert one. The global `~/.gitconfig` is trusted because
- *    `$HOME` is not writable from the sandbox.
+ *    the trusted value: the one in the system or global config, else an inert one. Both are trusted: the system config
+ *    (`/etc/gitconfig`, Apple git's `share/git-core/gitconfig`) is root-owned and `$HOME` is not writable from the
+ *    sandbox. Keeping the system config keeps Apple's `osxkeychain` credential helper.
  * 4. Flags right after the subcommand: `--no-ext-diff --no-textconv` (log/diff/show), `--upload-pack=git-upload-pack`
  *    and `--no-recurse-submodules` (fetch/pull), `--upload-pack=...` (ls-remote), `--receive-pack=...` (push).
  *
@@ -25,7 +26,8 @@
  * Residual: the dynamic overrides are computed from the config as read a moment before the command runs, so a writer
  * that changes the config in between is not covered for the name-keyed settings (the fixed ones are not racy).
  */
-import { resolve } from 'node:path';
+import { statSync } from 'node:fs';
+import { isAbsolute, resolve } from 'node:path';
 
 import { execa } from 'execa';
 
@@ -72,7 +74,7 @@ export const FIXED_OVERRIDES: ReadonlyArray<readonly [string, string]> = [
   ['protocol.file.allow', 'user'],
 ];
 
-/** Only these scopes are trusted: `$HOME` is not writable from the sandbox. Everything else came from a repo. */
+/** Only these scopes are trusted: `$HOME` is not writable from the sandbox and the system config is root-owned. Everything else came from a repo. */
 const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
 
 const FILTER_RE = /^filter\.(.+)\.(clean|smudge|process|required)$/i;
@@ -95,23 +97,53 @@ const SUBCOMMAND_FLAGS: Readonly<Record<string, readonly string[]>> = {
   push: ['--receive-pack=git-receive-pack'],
 };
 
-interface ConfigEntry {
+export interface ConfigEntry {
   scope: string;
+  /** `file:<path>`, `command line:` and so on. Optional so unit tests can leave it out. */
+  origin?: string;
   key: string;
   value: string;
 }
 
-/** Parse `git config --list --show-scope -z`: records are `scope NUL key NL value NUL` (a bare key has no NL). */
+/** Parse `git config --list --show-scope --show-origin -z`: records are `scope NUL origin NUL key NL value NUL` (a bare key has no NL). */
 export function parseConfigList(out: string): ConfigEntry[] {
   const parts = out.split('\0');
   const entries: ConfigEntry[] = [];
-  for (let i = 0; i + 1 < parts.length; i += 2) {
+  for (let i = 0; i + 2 < parts.length; i += 3) {
     const scope = parts[i] as string;
-    const kv = parts[i + 1] as string;
+    const origin = parts[i + 1] as string;
+    const kv = parts[i + 2] as string;
     const nl = kv.indexOf('\n');
-    entries.push(nl < 0 ? { scope, key: kv, value: '' } : { scope, key: kv.slice(0, nl), value: kv.slice(nl + 1) });
+    entries.push(nl < 0 ? { scope, origin, key: kv, value: '' } : { scope, origin, key: kv.slice(0, nl), value: kv.slice(nl + 1) });
   }
   return entries;
+}
+
+/** Is this file root-owned and not writable by group or others? Then the sandbox (running as the user) cannot have written it. */
+export function rootOwnedFile(path: string): boolean {
+  try {
+    const st = statSync(path);
+    return st.uid === 0 && (st.mode & 0o022) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Apple's git reads its own `share/git-core/gitconfig` and reports it with scope `unknown`, not `system`. Such an entry
+ * is trusted (relabelled `system`) only when its file is an absolute path that is root-owned and not group/world writable.
+ * Every other `unknown` entry stays untrusted.
+ */
+export function classifyScopes(entries: readonly ConfigEntry[], isRootOwned: (path: string) => boolean = rootOwnedFile): ConfigEntry[] {
+  const cache = new Map<string, boolean>();
+  return entries.map((e) => {
+    if (e.scope !== 'unknown' || !e.origin?.startsWith('file:')) return e;
+    const path = e.origin.slice('file:'.length);
+    if (!isAbsolute(path)) return e;
+    let ok = cache.get(path);
+    if (ok === undefined) cache.set(path, (ok = isRootOwned(path)));
+    return ok ? { ...e, scope: 'system' } : e;
+  });
 }
 
 /**
@@ -183,7 +215,6 @@ export function inspectArgs(args: readonly string[], cwd: string): { subcommand:
 export function safeEnv(base: GitEnv, extra: Readonly<Record<string, string>> = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v !== undefined && k !== 'GIT_EXTERNAL_DIFF') env[k] = v;
-  env.GIT_CONFIG_NOSYSTEM = '1';
   env.GIT_PAGER = 'cat';
   env.PAGER = 'cat';
   env.GIT_TERMINAL_PROMPT = '0';
@@ -224,14 +255,14 @@ export async function runGitSafe(args: readonly string[], opts: SafeGitOptions):
   const { subcommand, subIndex, dir } = inspectArgs(args, opts.cwd);
 
   // Reading config executes nothing. A failure here (corrupt config, no such directory) is a failure of the call.
-  const listing = await execa('git', ['-C', dir, ...FIXED_OVERRIDES.flatMap(([k, v]) => ['-c', `${k}=${v}`]), 'config', '--list', '--show-scope', '-z'], {
+  const listing = await execa('git', ['-C', dir, ...FIXED_OVERRIDES.flatMap(([k, v]) => ['-c', `${k}=${v}`]), 'config', '--list', '--show-scope', '--show-origin', '-z'], {
     cwd: opts.cwd,
     env: { ...env },
     extendEnv: false,
     stdin: 'ignore',
     ...timeout,
   });
-  const overrides = [...FIXED_OVERRIDES, ...dynamicOverrides(parseConfigList(String(listing.stdout)))];
+  const overrides = [...FIXED_OVERRIDES, ...dynamicOverrides(classifyScopes(parseConfigList(String(listing.stdout))))];
 
   const finalArgs = [...args];
   if (subcommand !== undefined) {

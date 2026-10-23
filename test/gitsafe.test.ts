@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { checkRemoteBranch, commitsBetween, currentBranch, defaultGit, headSha, porcelainHash, stashCount } from '../src/gitinfo.ts';
-import { dynamicOverrides, FIXED_OVERRIDES, inspectArgs, parseConfigList, runGitSafe, safeEnv } from '../src/gitsafe.ts';
+import { classifyScopes, dynamicOverrides, FIXED_OVERRIDES, inspectArgs, parseConfigList, runGitSafe, safeEnv } from '../src/gitsafe.ts';
 import { readRemoteUrls } from '../src/remotes.ts';
 import { gitFetchOrigin } from '../src/wiring.ts';
 
@@ -416,12 +416,63 @@ describe('precedence: command-line -c beats repo config and includes', () => {
   });
 });
 
+describe('the system git config is trusted (GIT_CONFIG_SYSTEM simulates /etc/gitconfig)', () => {
+  let sysFile: string;
+  let saved: string | undefined;
+  beforeEach(() => {
+    sysFile = join(base, 'system.gitconfig');
+    saved = process.env['GIT_CONFIG_SYSTEM'];
+    process.env['GIT_CONFIG_SYSTEM'] = sysFile;
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env['GIT_CONFIG_SYSTEM'];
+    else process.env['GIT_CONFIG_SYSTEM'] = saved;
+  });
+
+  it('GIT_CONFIG_NOSYSTEM is not set for git', () => {
+    expect(safeEnv({ PATH: '/bin' })['GIT_CONFIG_NOSYSTEM']).toBeUndefined();
+  });
+
+  it('a system-scope value survives, and wins over a planted repo value for a name-keyed key', async () => {
+    writeFileSync(sysFile, `[user]\n\tname = from-system\n[filter "evil"]\n\tclean = cat\n`);
+    cfg('filter.evil.clean', evil('sys-clean', 'cat'));
+    const get = async (key: string) => (await runGitSafe(['config', '--get', key], { cwd: repo, env: process.env, reject: false })).stdout.trim();
+    expect(await get('user.name')).toBe('from-system');
+    expect(await get('filter.evil.clean')).toBe('cat');
+    racy();
+    expect(await porcelainHash(repo)).toBe(EMPTY_SHA256);
+    expect(readMarkers()).toEqual([]);
+  });
+
+  it('a system credential helper is kept, a planted one is dropped', async () => {
+    writeFileSync(sysFile, `[credential]\n\thelper = "!f() { echo username=from-system; echo password=ok; }; f"\n`);
+    cfg('credential.helper', `!${evil('sys-cred', 'echo username=planted; echo password=bad')}`);
+    const res = (await runGitSafe(['credential', 'fill'], { cwd: repo, env: process.env, reject: false, input: 'protocol=https\nhost=example.invalid\n\n' })).stdout;
+    expect(res).toContain('username=from-system');
+    expect(res).not.toContain('planted');
+    expect(readMarkers()).toEqual([]);
+  });
+
+  it('a global-scope value survives alongside a system one', async () => {
+    const home = process.env['HOME'] as string;
+    writeFileSync(sysFile, `[user]\n\tname = from-system\n`);
+    writeFileSync(join(home, '.gitconfig'), `[user]\n\temail = global@example.com\n`);
+    try {
+      const get = async (key: string) => (await runGitSafe(['config', '--get', key], { cwd: repo, env: process.env, reject: false })).stdout.trim();
+      expect(await get('user.name')).toBe('from-system');
+      expect(await get('user.email')).toBe('global@example.com');
+    } finally {
+      rmSync(join(home, '.gitconfig'), { force: true });
+    }
+  });
+});
+
 describe('gitsafe units', () => {
   it('parseConfigList reads scope, key and value, bare keys and multi-line values', () => {
-    expect(parseConfigList('local\0core.bare\nfalse\0global\0some.flag\0local\0a.b\nl1\nl2\0')).toEqual([
-      { scope: 'local', key: 'core.bare', value: 'false' },
-      { scope: 'global', key: 'some.flag', value: '' },
-      { scope: 'local', key: 'a.b', value: 'l1\nl2' },
+    expect(parseConfigList('local\0file:.git/config\0core.bare\nfalse\0global\0file:/h/.gitconfig\0some.flag\0local\0file:.git/config\0a.b\nl1\nl2\0')).toEqual([
+      { scope: 'local', origin: 'file:.git/config', key: 'core.bare', value: 'false' },
+      { scope: 'global', origin: 'file:/h/.gitconfig', key: 'some.flag', value: '' },
+      { scope: 'local', origin: 'file:.git/config', key: 'a.b', value: 'l1\nl2' },
     ]);
   });
 
@@ -448,6 +499,29 @@ describe('gitsafe units', () => {
     expect(readMarkers()).toEqual([]);
   });
 
+  it('classifyScopes trusts an unknown-scope entry only from an absolute, root-owned, not group/world-writable file', () => {
+    const e = (origin: string) => ({ scope: 'unknown', origin, key: 'credential.helper', value: 'osxkeychain' });
+    const owned = (p: string) => p === '/Applications/Xcode.app/share/git-core/gitconfig';
+    const out = classifyScopes([e('file:/Applications/Xcode.app/share/git-core/gitconfig'), e('file:/work/acme-api/.git/evil'), e('file:relative/cfg'), e('command line:'), { scope: 'local', origin: 'file:/Applications/Xcode.app/share/git-core/gitconfig', key: 'a.b', value: '' }], owned);
+    expect(out.map((x) => x.scope)).toEqual(['system', 'unknown', 'unknown', 'unknown', 'local']);
+    expect(dynamicOverrides([...out, { scope: 'local', origin: 'file:.git/config', key: 'credential.helper', value: '!evil' }])).toEqual([
+      ['credential.helper', ''],
+      ['credential.helper', 'osxkeychain'],
+    ]);
+  });
+
+  it('dynamicOverrides never resets a system-scope value: a planted filter falls back to it', () => {
+    const o = dynamicOverrides([
+      { scope: 'system', key: 'filter.lfs.clean', value: 'git-lfs clean -- %f' },
+      { scope: 'local', key: 'filter.lfs.clean', value: '!evil' },
+      { scope: 'system', key: 'credential.helper', value: 'osxkeychain' },
+      { scope: 'local', key: 'credential.helper', value: '!evil' },
+    ]);
+    const m = new Map(o);
+    expect(m.get('filter.lfs.clean')).toBe('git-lfs clean -- %f');
+    expect(o.filter(([k]) => k === 'credential.helper')).toEqual([['credential.helper', ''], ['credential.helper', 'osxkeychain']]);
+  });
+
   it('inspectArgs finds the subcommand past -C and -c', () => {
     expect(inspectArgs(['-C', 'x', '-c', 'a=b', 'log', '--oneline'], '/r')).toMatchObject({ subcommand: 'log', subIndex: 4, dir: '/r/x' });
     expect(inspectArgs(['--paginate', 'status'], '/r')).toMatchObject({ subcommand: 'status', subIndex: 1 });
@@ -455,8 +529,9 @@ describe('gitsafe units', () => {
 
   it('safeEnv sets the trusted env and keeps a caller GIT_SSH_COMMAND', () => {
     const e = safeEnv({ PATH: '/bin', GIT_EXTERNAL_DIFF: 'x', GIT_PAGER: 'less', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' });
-    expect(e).toMatchObject({ GIT_CONFIG_NOSYSTEM: '1', GIT_PAGER: 'cat', PAGER: 'cat', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' });
+    expect(e).toMatchObject({ GIT_PAGER: 'cat', PAGER: 'cat', GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0', GIT_SSH_COMMAND: 'ssh -o BatchMode=yes' });
     expect(e['GIT_EXTERNAL_DIFF']).toBeUndefined();
+    expect(e['GIT_CONFIG_NOSYSTEM']).toBeUndefined();
     expect(safeEnv({})['GIT_SSH_COMMAND']).toBe('ssh');
   });
 

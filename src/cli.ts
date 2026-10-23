@@ -15,6 +15,7 @@ import { APP, COMMANDS, CONFIG_DIR_NAME, ENV_PREFIX, TMP_PREFIX } from './brand.
 import { auditRepo } from './audit.ts';
 import { cliInvocation, realExec, realProfileAccess, type CliDeps, type ExecFn, type ProfileAccess } from './cli-deps.ts';
 import type { RepoEntry } from './contracts.ts';
+import { runGitSafe } from './gitsafe.ts';
 import { doctor, formatDoctor, hasHardFailure, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { InstallError, installCommands, uninstallCommands } from './install.ts';
 import { buildLaunchManifest, launch, report, resolveJobPath, settleRunContext, status, stop, type LauncherIo } from './launcher.ts';
@@ -151,7 +152,7 @@ export function buildProgram(opts: ProgramOptions): Command {
           err('note: no profile found; running the generic checks only');
         }
         const gitRun = async (args: string[], cwd: string): Promise<string> => {
-          const r = await exec('git', args, { cwd });
+          const r = await runGitSafe(args, { cwd, env: opts.env ?? process.env, reject: false });
           if (r.exitCode !== 0) throw new Error(`git ${args[0]} failed in ${cwd}: ${r.stderr.trim()}`);
           return r.stdout;
         };
