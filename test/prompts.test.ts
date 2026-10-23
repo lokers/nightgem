@@ -286,6 +286,8 @@ describe('never-list and subagent appends', () => {
       expect(out).toContain("Quoted heredocs (`<<'EOF'`) work for files and JSONL");
       expect(out).toContain('bash and `sh` need a writable cwd');
       expect(out).toContain('retype it with plain ASCII spaces');
+      expect(out).toContain('even inside a heredoc body or a quoted string');
+      expect(out).toContain('write the file with the write tool');
       expect(out).toContain('`git commit -F <file>`');
     },
   );

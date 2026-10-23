@@ -17,6 +17,10 @@ encodings, `sh -c`, `env`, alternate paths, symlinks or other tricks.
 - **Temp files:** `$TMPDIR` is the run's own writable temp dir, and bare `mktemp` already uses it. `/tmp`, `/var/tmp` and other
   shared temp dirs are not writable. Quoted heredocs (`<<'EOF'`) work for files and JSONL; bash and `sh` need a writable cwd,
   which the run dir or a worktree is.
+- **Denied words anywhere in a shell command are refused**, even inside a heredoc body or a quoted string: the permission
+  profile reads the whole command text. If a file's content, a search string or a path mentions a denied tool (e.g. `gh`,
+  `docker`, `ssh`), or `git` together with `push`/`stash`, write the file with the write tool and inspect it with the read,
+  grep and glob tools instead of the shell.
 - No reading `.env` or other secret files. `.env.defaults` and `*.example` are fine.
 - No hand edits of generated files (marked as generated, or named as generated in the workspace instructions). Regenerate them with the
   repo's own generator.
