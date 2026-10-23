@@ -308,6 +308,8 @@ allow|shell|cat src/claude/x.ts
 allow|shell|ls src/opencode
 allow|shell|ls infra/docker
 allow|shell|ls infra/terraform
+allow|shell|node cli.js --tool=docker
+allow|shell|export TMPDIR=/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode
 allow|shell|cat config/ssh
 allow|shell|ls {{WORKSPACE}}/acme-web/libs/security
 deny|shell|sudo jira me

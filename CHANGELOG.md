@@ -17,6 +17,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `doctor` and the `launch` warnings print at most 200 characters per line, with long details summarised (#8)
 - `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried (#9)
 
+### Fixed
+
+- The guard no longer blocks path or `VAR=value` arguments that merely end in a denied command name, such as `ls docs/gh` or `export TMPDIR=…/T/opencode` (#7)
+
 ## [0.1.0] - 2026-10-23
 
 First public release. Experimental: macOS only, run from a clone (not published to npm yet).

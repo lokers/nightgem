@@ -1225,3 +1225,78 @@ block|shell|npm run x --script-shell=/usr/bin/gh
 block|shell|git bisect run /usr/bin/gh
 # copy of the binary to a relative target (the block must not come from a /tmp write)
 block|shell|cp /opt/homebrew/bin/gh ./x
+# ---- T3b: a path or `VAR=value` argument that merely ENDS in a denied name is allowed; the same text as a command stays blocked (#7)
+# the false positives of 0.1.0
+allow|shell|ls docs/gh
+allow|shell|cat config/ssh
+allow|shell|ls infra/docker
+allow|shell|ls infra/terraform
+allow|shell|ls src/opencode
+allow|shell|ls tools/brew
+allow|shell|node cli.js --tool=docker
+allow|shell|export TMPDIR=/private/var/folders/xx/abcdefghijklmnopqrstuvwxyz0000gn/T/opencode
+# other plain arguments of read-only commands
+allow|shell|ls -la /opt/homebrew/bin/gh
+allow|shell|cd infra/docker && ls
+allow|shell|git log -- docs/gh
+allow|shell|git -C tools/brew status
+allow|shell|find infra/terraform -name x
+allow|shell|grep -r foo src/opencode
+allow|shell|ls docs/gh 2>/dev/null
+allow|shell|if [ -d docs/gh ]; then ls docs/gh; fi
+allow|shell|FOO=/usr/bin/gh ls
+allow|shell|python3 x.py --tool=docker
+allow|shell|cat <<EOF\ndocs/gh\nEOF
+# near misses: the denied command itself, in a spelling the relaxation must not touch
+block|shell|ls docs/gh; /usr/bin/gh pr list
+block|shell|ls docs/gh; gh pr list
+block|shell|ls docs/gh && /usr/bin/gh pr list
+block|shell|ls docs/gh | /usr/bin/gh pr list
+block|shell|ls docs/gh\n/usr/bin/gh pr list
+block|shell|ls docs/gh | sh
+block|shell|ls docs/gh | bash -s
+block|shell|ls docs/gh | xargs /usr/bin/gh
+block|shell|ls docs/gh | xargs -I{} /usr/bin/gh {}
+block|shell|X=/usr/bin/gh; $X pr list
+block|shell|export TMPDIR=/x/opencode && opencode run x
+block|shell|export TMPDIR=/x/opencode; /usr/local/bin/opencode run x
+block|shell|ls infra/docker; /usr/local/bin/docker ps
+block|shell|cat config/ssh; /usr/bin/ssh host
+# an exec hook set through `=`, in a command that would run it
+block|shell|PAGER=/usr/bin/gh git log
+block|shell|export GIT_PAGER=/usr/bin/gh; git log
+block|shell|export EDITOR=/usr/bin/gh; git commit
+block|shell|SHELL=/usr/bin/gh make
+block|shell|export npm_config_script_shell=/usr/bin/gh; npm test
+block|shell|git log --pager=/usr/bin/gh
+block|shell|git -c core.pager=/usr/bin/gh log
+block|shell|tar --use-compress-program=/usr/bin/gh -cf x.tar .
+# the path is the command, or is run by the command that takes it
+block|shell|/usr/bin/gh pr list
+block|shell|cat x && /usr/bin/gh pr list
+block|shell|find . -exec /usr/bin/gh {} \;
+block|shell|find . -execdir /usr/bin/gh {} +
+block|shell|node /opt/homebrew/bin/codex
+block|shell|node --require=/usr/lib/gh x.js
+block|shell|python3 /usr/bin/gh
+block|shell|python3 -c 'print(1)' /usr/bin/gh
+block|shell|node -e 1 --tool=docker
+block|shell|git rebase -x /usr/bin/gh main
+block|shell|git submodule foreach /usr/bin/gh
+block|shell|setsid /usr/bin/gh pr list
+block|shell|sudo /usr/bin/gh pr list
+block|shell|env /usr/bin/gh pr list
+block|shell|xargs /usr/bin/gh
+# a copy or a script written for a later run
+block|shell|cp /usr/bin/gh x
+block|shell|ln -s /usr/bin/gh x
+block|shell|echo /usr/bin/gh pr list > x.sh; chmod +x x.sh; ./x.sh
+block|shell|ls docs/gh > /usr/bin/gh
+block|shell|alias g=/usr/bin/gh; g pr list
+# quotes, dynamic words, process substitution and comments are not relaxed
+block|shell|ls "docs/gh"
+block|shell|ls 'infra/docker'
+block|shell|ls $HOME/docs/gh
+block|shell|ls $(echo docs/gh)
+block|shell|ls docs/gh # /usr/bin/gh
+block|shell|ls <(echo docs/gh)

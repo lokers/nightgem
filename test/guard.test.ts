@@ -113,7 +113,7 @@ describe('bypass corpus', () => {
   const corpus = loadCorpus();
 
   it('has a substantial corpus with all three verdicts', () => {
-    expect(corpus.length).toBeGreaterThan(1170);
+    expect(corpus.length).toBeGreaterThan(1230);
     expect(new Set(corpus.map((l) => l.expected))).toEqual(new Set(['allow', 'block', 'rewrite']));
   });
 
