@@ -12,7 +12,7 @@ import { isNeverStartedFailure, isTerminalRunState, RUN_MANIFEST_VERSION, RunCon
 import { doctor, formatDoctor, formatWarning, hardFailures, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { assertSlug, isValidSlug, recordedControlDir, recordedLaunchdLabel, runPaths, type RunPaths } from './paths.ts';
 import { buildJobEnv, buildProgramArgs, launchdLabel, renderPlist } from './plist.ts';
-import { loadSpec } from './specmeta.ts';
+import { loadSpec, type SpecMeta } from './specmeta.ts';
 
 /** The frozen run context in the (agent-unwritable) control dir. */
 
@@ -136,51 +136,57 @@ async function jobState(exec: ExecFn, uid: number, label: string): Promise<{ loa
   return { loaded: true, running: /state = running/.test(r.stdout) };
 }
 
-export async function launch(input: LaunchInput): Promise<LaunchResult> {
+export interface LaunchGatesInput {
+  slug: string;
+  /** `--repos` override for the spec's repo list. */
+  repos?: string[] | undefined;
+  deps: CliDeps;
+  exec: ExecFn;
+  fs?: DoctorFs | undefined;
+  io?: LauncherIo | undefined;
+  /** Parent environment to filter the job env from. Default `process.env`. */
+  parentEnv?: Record<string, string | undefined> | undefined;
+  /** Reuse an already frozen run context (resume) instead of resolving a fresh one. It is still schema-validated. */
+  runContext?: RunContextSnapshot | undefined;
+  /**
+   * Runs right after the run context and spec are loaded and before the doctor, for a caller-specific check that must keep
+   * its place in the order (`launch` refuses an existing slug here; `resume` needs the opposite check).
+   */
+  afterLoad?: ((loaded: { runContext: RunContextSnapshot; spec: SpecMeta; paths: RunPaths }) => Promise<void> | void) | undefined;
+}
+
+export interface LaunchGates {
+  runContext: RunContextSnapshot;
+  spec: SpecMeta;
+  label: string;
+  paths: RunPaths;
+  opencodePath: string;
+  gitPath: string;
+  /** The doctor's non-fatal findings, formatted. Already printed through `io.out`. */
+  warnings: string[];
+}
+
+/**
+ * Everything that must hold before a job may start, shared by `launch` and `resume`: the run context and spec, the doctor
+ * (binaries on the job PATH, AC power, free lock, remote credentials, preflight, ...), the resolved `opencode` / `git` paths
+ * and "launchd job not already loaded". Throws on the first failure. Creates nothing: no baseline, no dirs, no lock, no
+ * manifest, no bootstrap; those stay with the caller.
+ */
+export async function runLaunchGates(input: LaunchGatesInput): Promise<LaunchGates> {
   const { deps, exec } = input;
   const io = input.io ?? defaultIo;
   const fs = input.fs ?? realFs;
-  // first thing: a slug that is not kebab-case (or looks like a push/gh/ssh command, see paths.ts) is a clear error
   const slug = assertSlug(input.slug);
-  if (!Number.isFinite(input.budgetUsd) || input.budgetUsd <= 0) {
-    throw new Error(`Invalid budget "${input.budgetUsd}" (expected a positive USD amount)`);
-  }
-  const costMultiplier = input.costMultiplier ?? 1;
-  if (!Number.isFinite(costMultiplier) || costMultiplier <= 0) {
-    throw new Error(`Invalid cost multiplier "${costMultiplier}" (expected a positive number)`);
-  }
-  if (input.softPct !== undefined && !(Number.isFinite(input.softPct) && input.softPct >= 0.1 && input.softPct <= 0.95)) {
-    throw new Error(`Invalid soft threshold "${input.softPct}" (expected a fraction between 0.1 and 0.95)`);
-  }
 
-  // 1. Run context (workspace root, profile, models, safety inputs), slug and spec.
+  // 1. Run context (workspace root, profile, models, safety inputs) and spec.
   // validated before anything is created: a context the orchestrator could not read back must not launch
-  const runContext = RunContextSnapshot.parse(await deps.resolveRunContext());
+  const runContext = RunContextSnapshot.parse(input.runContext ?? (await deps.resolveRunContext()));
   const { workspaceRoot } = runContext;
   const keyPattern = runContext.profile.data.tracker.keyPattern;
   const spec = loadSpec(slug, { home: deps.home, workspaceRoot, repoOverride: input.repos, ...(keyPattern === undefined ? {} : { keyPattern: new RegExp(keyPattern) }) });
+  const paths = runPaths(slug, { home: deps.home, workspaceRoot });
 
-  // 1b. A slug that already has a run is never relaunched: that would overwrite its RUN.json (and its history).
-  const existing = runPaths(slug, { home: deps.home, workspaceRoot });
-  let existingManifest: RunManifest | undefined;
-  try {
-    existingManifest = await deps.readManifest(slug);
-  } catch {
-    // unreadable or invalid: still a run that is on disk, refused below
-  }
-  // the one exception: a launch that failed before the run ever started holds no history, so the slug can be retried
-  const retryable = existingManifest !== undefined && isNeverStartedFailure(existingManifest);
-  if (!retryable && (existingManifest !== undefined || existsSync(existing.runJson) || existsSync(join(existing.specsDir, 'RUN.json')))) {
-    const cli = cliInvocation(deps.nodePath);
-    const state = existingManifest?.state;
-    const resumable = state === 'stopped' || state === 'aborted-budget' || state === 'failed' || state === 'stalled';
-    const next = resumable
-      ? `To continue it, run "${cli} resume ${slug} --budget <usd>", or launch under a new slug.`
-      : state === undefined || state === 'completed'
-        ? `Launch under a new slug${state === undefined ? ' (or inspect it with "status")' : ''}.`
-        : `It is still active: check it with "${cli} status ${slug}" or stop it with "${cli} stop ${slug}", or launch under a new slug.`;
-    throw new Error(`Run "${slug}" already exists${state === undefined ? '' : ` (state: ${state})`}; launch will not overwrite its RUN.json. ${next}`);
-  }
+  await input.afterLoad?.({ runContext, spec, paths });
 
   // 2. Doctor: any hard failure aborts. The verify tools are looked up on the PATH the JOB will get, not ours.
   const opencodeResolved = await resolveBin(exec, 'opencode').then((p) => ({ path: p }), (error: unknown) => ({ error }));
@@ -209,18 +215,71 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
   if (hard.length > 0) {
     throw new Error(`doctor reported hard failures, not launching:\n${formatDoctor({ checks: hard })}`);
   }
-  for (const c of report.checks) if (!c.ok) io.out(formatWarning(c));
+  const warnings: string[] = [];
+  for (const c of report.checks) {
+    if (c.ok) continue;
+    const line = formatWarning(c);
+    warnings.push(line);
+    io.out(line);
+  }
 
   if ('error' in opencodeResolved) throw opencodeResolved.error;
   if ('error' in gitResolved) throw gitResolved.error;
-  const opencodePath = opencodeResolved.path;
-  const gitPath = gitResolved.path;
   const label = launchdLabel(slug);
-  const paths = runPaths(slug, { home: deps.home, workspaceRoot });
 
   if ((await jobState(exec, deps.uid, label)).loaded) {
     throw new Error(`launchd job ${label} is already loaded. Run "${cliInvocation(deps.nodePath)} stop ${slug}" first.`);
   }
+  return { runContext, spec, label, paths, opencodePath: opencodeResolved.path, gitPath: gitResolved.path, warnings };
+}
+
+export async function launch(input: LaunchInput): Promise<LaunchResult> {
+  const { deps, exec } = input;
+  const io = input.io ?? defaultIo;
+  // first thing: a slug that is not kebab-case (or looks like a push/gh/ssh command, see paths.ts) is a clear error
+  const slug = assertSlug(input.slug);
+  if (!Number.isFinite(input.budgetUsd) || input.budgetUsd <= 0) {
+    throw new Error(`Invalid budget "${input.budgetUsd}" (expected a positive USD amount)`);
+  }
+  const costMultiplier = input.costMultiplier ?? 1;
+  if (!Number.isFinite(costMultiplier) || costMultiplier <= 0) {
+    throw new Error(`Invalid cost multiplier "${costMultiplier}" (expected a positive number)`);
+  }
+  if (input.softPct !== undefined && !(Number.isFinite(input.softPct) && input.softPct >= 0.1 && input.softPct <= 0.95)) {
+    throw new Error(`Invalid soft threshold "${input.softPct}" (expected a fraction between 0.1 and 0.95)`);
+  }
+
+  const { runContext, spec, label, paths, opencodePath, gitPath } = await runLaunchGates({
+    slug,
+    repos: input.repos,
+    deps,
+    exec,
+    fs: input.fs,
+    io,
+    parentEnv: input.parentEnv,
+    // 1b. A slug that already has a run is never relaunched: that would overwrite its RUN.json (and its history).
+    afterLoad: async ({ paths: existing }) => {
+      let existingManifest: RunManifest | undefined;
+      try {
+        existingManifest = await deps.readManifest(slug);
+      } catch {
+        // unreadable or invalid: still a run that is on disk, refused below
+      }
+      // the one exception: a launch that failed before the run ever started holds no history, so the slug can be retried
+      const retryable = existingManifest !== undefined && isNeverStartedFailure(existingManifest);
+      if (!retryable && (existingManifest !== undefined || existsSync(existing.runJson) || existsSync(join(existing.specsDir, 'RUN.json')))) {
+        const cli = cliInvocation(deps.nodePath);
+        const state = existingManifest?.state;
+        const resumable = state === 'stopped' || state === 'aborted-budget' || state === 'failed' || state === 'stalled';
+        const next = resumable
+          ? `To continue it, run "${cli} resume ${slug} --budget <usd>", or launch under a new slug.`
+          : state === undefined || state === 'completed'
+            ? `Launch under a new slug${state === undefined ? ' (or inspect it with "status")' : ''}.`
+            : `It is still active: check it with "${cli} status ${slug}" or stop it with "${cli} stop ${slug}", or launch under a new slug.`;
+        throw new Error(`Run "${slug}" already exists${state === undefined ? '' : ` (state: ${state})`}; launch will not overwrite its RUN.json. ${next}`);
+      }
+    },
+  });
 
   // 3. Git baseline per repo.
   const repos = await deps.buildBaseline(spec.repos.map((r) => r.path));
