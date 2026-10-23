@@ -20,6 +20,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - The guard no longer blocks path or `VAR=value` arguments that merely end in a denied command name, such as `ls docs/gh` or `export TMPDIR=…/T/opencode` (#7)
+- A `NAME=value` word that holds a denied command's path is relaxed only for directory-like names (`TMPDIR`, `*_DIR`, `*_ROOT`, `*_HOME`, `*_CACHE`); `GHBIN=/usr/bin/gh` is still refused (#7)
+- The guard refuses a shell command that contains non-ASCII whitespace (such as a no-break space) or a control character right away, with a clear reason, and the tokenizer can no longer loop on it (#7)
 
 ## [0.1.0] - 2026-10-23
 

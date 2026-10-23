@@ -207,7 +207,8 @@ export function tokenize(cmd) {
   const pushWord = (v, dyn) => toks.push({ t: 'word', v, dyn });
   while (i < n) {
     const c = cmd[i];
-    if (c === ' ' || c === '\t' || c === '\r') {
+    // any whitespace but a newline: the word loop below ends at every `\s`, so a character left here would never advance
+    if (c !== '\n' && /\s/.test(c)) {
       i++;
       continue;
     }
@@ -449,13 +450,14 @@ const PATH_ARG_MATCH = (name) => new RegExp(`(?<=[/=])${escapeRe(name)}(?=$|[\\s
 //  2. EVERY simple command in the text starts with a command word from PATH_ARG_HEADS (read/navigate/inspect tools that
 //     run none of their arguments). A wrapper, shell, `eval`, `source`/`.`, `xargs`, `make`, `npm`/`npx`, `awk`, a
 //     path-spelled word, `alias`, a function definition... is not in the list, so a line using one is never relaxed;
-//  3. `git` only with a read-only subcommand and no `-c`; `find` without `-exec*`/`-ok*`; `node`/`python` without an
+//  3. `git` only with a path/ref subcommand (GIT_PATH_ARG_SUBS) and no `-c` or program-naming option; `find` without `-exec*`/`-ok*`; `node`/`python` without an
 //     inline-code or module flag (`-c`, `-e`, `-p`, `-m`, `--eval`, ...). An interpreter RUNS a path argument
 //     (`node ~/.local/bin/<cli>` is that cli), so for `node`/`python` only `--opt=name` is relaxed, never a path ending in the name;
 //  4. the only redirect target is /dev/null (no file is written with the name in it for a later `./x`);
 //  5. no word anywhere is an execution sink word (shells, wrappers, `xargs`, `awk`, ...);
-//  6. an `NAME=...` or `--opt=...` value is only relaxed when NAME is no exec hook (`*PAGER`, `*EDITOR`, `SHELL`, `GIT_*`,
-//     `npm_config_*`, `PATH`, `--extcmd`, `--exec-path`, `--use-compress-program`, ...);
+//  6. a `NAME=value` word is only relaxed when NAME is a directory-like variable (DIR_VAR_KEY_RE: `TMPDIR`, `*_DIR`, `*_ROOT`,
+//     `*_HOME`, `*_CACHE`) and no exec hook; a `--opt=value` is only relaxed when `--opt` is no exec hook (`--extcmd`,
+//     `--exec-path`, `--use-compress-program`, ...);
 //  7. every match is accounted for: the matches inside the accepted words equal the matches in the text (a match in a
 //     comment, a redirect target or anything else the parse did not classify keeps the block).
 // ---------------------------------------------------------------------------
@@ -479,11 +481,17 @@ const EXEC_SINK_WORDS = new Set([
 /** Names of options and variables that make a program run what their value names. Tested on the text before the `=` that precedes the match. */
 const EXEC_HOOK_KEY_RE =
   /pager|editor|visual|browser|shell|exec|cmd|command|program|helper|ssh|rsh|hook|askpass|proxy|textconv|filter|launcher|wrapper|compress|script|pack|^-*path$|^git_|^npm_|^bash_env$|^env$|^ld_|^dyld_|^less|^prompt|^ps\d|ifs/i;
+/**
+ * A `KEY=value` word (a prefix assignment, or an argument of export/declare/local/...) is relaxed only for directory-like
+ * variables. A variable that holds a program path (`GHBIN=/usr/bin/gh`) stays refused: the guard does not follow shell state, so
+ * a later `$GHBIN pr list` would not be caught. An exec-hook key (EXEC_HOOK_KEY_RE) stays refused even when it ends in `_DIR`.
+ */
+const DIR_VAR_KEY_RE = /^(?:TMPDIR|TMPPREFIX|TMP|TEMP|TEMPDIR|[A-Z][A-Z0-9_]*_(?:DIR|ROOT|HOME|CACHE))$/;
 const INTERPRETER_HEADS = new Set(['node', 'python', 'python3']);
 /** Options of an interpreter whose value is code to load. */
 const INTERPRETER_LOAD_KEY_RE = /require|import|loader|preload|^-*r$|inspect|run|test|check|plugin|config/i;
-/** Read-only git subcommands (no hook, pager, editor or transport of their own). */
-const GIT_READ_SUBS = new Set([
+/** git subcommands whose arguments are paths or refs, never a program to run (some of them write: `add`, `restore`, `checkout`, `switch`). */
+const GIT_PATH_ARG_SUBS = new Set([
   'status', 'log', 'diff', 'show', 'ls-files', 'ls-tree', 'rev-parse', 'rev-list', 'branch', 'blame', 'describe', 'shortlog',
   'cat-file', 'diff-tree', 'merge-base', 'add', 'restore', 'checkout', 'switch',
 ]);
@@ -492,8 +500,9 @@ function pathArgHeadOk(head, args) {
   if (!PATH_ARG_HEADS.has(head)) return false;
   const vs = args.map((a) => a.v);
   if (head === 'git') {
-    if (vs.some((v) => /^-c/.test(v) || /^--(?:config-env|exec-path)/.test(v))) return false;
-    return GIT_READ_SUBS.has(gitInvocation(vs).sub);
+    // `-c`, and every option that names a program to run (`--upload-pack`, `--receive-pack`, `--exec`, `--extcmd`, `--tool`, `-x`)
+    if (vs.some((v) => /^-c/.test(v) || v === '-x' || /^--(?:config-env|exec-path|upload-pack|receive-pack|exec|extcmd|tool)(?:=|$)/.test(v))) return false;
+    return GIT_PATH_ARG_SUBS.has(gitInvocation(vs).sub);
   }
   if (head === 'find') return !vs.some((v) => /^-(?:exec|ok)/.test(v));
   if (head === 'node' || head === 'python' || head === 'python3') {
@@ -510,6 +519,10 @@ function onlyPathArguments(text, name) {
   let accepted = 0;
   const tally = (word, interpreter = false) => {
     for (const m of word.v.matchAll(PATH_ARG_MATCH(name))) {
+      if (ASSIGN_RE.test(word.v)) {
+        const key = word.v.slice(0, word.v.indexOf('='));
+        if (!DIR_VAR_KEY_RE.test(key) || EXEC_HOOK_KEY_RE.test(key)) return false;
+      }
       const before = word.v.slice(0, m.index);
       const eq = before.indexOf('=');
       if (eq !== -1 && EXEC_HOOK_KEY_RE.test(before.slice(0, eq))) return false;
@@ -1187,9 +1200,18 @@ export function splitHeredocs(cmd) {
   return { text, bodies, scanned };
 }
 
+/**
+ * Whitespace other than space, tab, newline and CR (NBSP, U+2000..U+200A, U+3000, VT, FF, ...), invisible format characters
+ * (zero-width space and joiners, BOM, word joiner) and control characters. The shell reads some of these as ordinary word
+ * characters and some as blanks, and the tokenizer here may read them differently: refused at every depth, before any parsing.
+ */
+const ODD_CHARS_RE = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u00a0\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u2064\u3000\ufeff]/;
+const ODD_CHARS_REASON = 'shell commands with non-ASCII whitespace or control characters are refused; retype the command with plain spaces';
+
 /** `null` when the shell command is acceptable, otherwise the block reason. */
 export function checkShellCommand(cmd, cfg, depth = 0) {
   if (depth > 4) return 'shell command nests too deeply';
+  if (ODD_CHARS_RE.test(cmd)) return ODD_CHARS_REASON;
   const hd = splitHeredocs(cmd);
   const text = hd.text;
   const pat = checkPatterns(text, cfg, depth === 0);

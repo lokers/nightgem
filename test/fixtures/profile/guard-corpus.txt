@@ -1244,7 +1244,10 @@ allow|shell|find infra/terraform -name x
 allow|shell|grep -r foo src/opencode
 allow|shell|ls docs/gh 2>/dev/null
 allow|shell|if [ -d docs/gh ]; then ls docs/gh; fi
-allow|shell|FOO=/usr/bin/gh ls
+allow|shell|CACHE_DIR=/x/gh ls
+allow|shell|export BUILD_ROOT=/x/gh
+allow|shell|TMPDIR=/x/opencode ls
+allow|shell|git add docs/gh
 allow|shell|python3 x.py --tool=docker
 allow|shell|cat <<EOF\ndocs/gh\nEOF
 # near misses: the denied command itself, in a spelling the relaxation must not touch
@@ -1262,6 +1265,23 @@ block|shell|export TMPDIR=/x/opencode && opencode run x
 block|shell|export TMPDIR=/x/opencode; /usr/local/bin/opencode run x
 block|shell|ls infra/docker; /usr/local/bin/docker ps
 block|shell|cat config/ssh; /usr/bin/ssh host
+# a variable that holds a program path is refused (the guard does not follow shell state to a later `$VAR`); only directory-like names are relaxed
+block|shell|FOO=/usr/bin/gh ls
+block|shell|export GHBIN=/usr/bin/gh
+block|shell|X=/usr/bin/gh
+block|shell|local B=/usr/bin/gh
+block|shell|declare -x T=/x/gh
+block|shell|readonly GH=/x/gh
+block|shell|typeset G=/x/gh
+block|shell|export lower_dir=/x/gh
+block|shell|export GIT_DIR=/x/gh
+block|shell|export PAGER_DIR=/x/gh
+block|shell|export NPM_CONFIG_CACHE=/x/gh
+# git subcommands that take a path never get to name a program
+block|shell|git checkout --tool=/x/gh
+block|shell|git add --exec=/x/gh
+block|shell|git log --upload-pack=/x/gh
+block|shell|git add -x /x/gh
 # an exec hook set through `=`, in a command that would run it
 block|shell|PAGER=/usr/bin/gh git log
 block|shell|export GIT_PAGER=/usr/bin/gh; git log

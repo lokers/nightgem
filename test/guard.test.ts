@@ -15,6 +15,7 @@ import {
   isAllowedWritePath,
   rootToRegExp,
   splitHeredocs,
+  tokenize,
   type GuardConfig,
   type GuardFlags,
 } from '../profile/guard/decide.mjs';
@@ -113,7 +114,7 @@ describe('bypass corpus', () => {
   const corpus = loadCorpus();
 
   it('has a substantial corpus with all three verdicts', () => {
-    expect(corpus.length).toBeGreaterThan(1230);
+    expect(corpus.length).toBeGreaterThan(1250);
     expect(new Set(corpus.map((l) => l.expected))).toEqual(new Set(['allow', 'block', 'rewrite']));
   });
 
@@ -307,7 +308,15 @@ describe('path and assignment arguments that end in a denied name (#7)', () => {
       'ls docs/gh 2>/dev/null',
       'ls docs/gh; ls src/opencode\nls tools/brew',
       'if [ -d docs/gh ]; then ls docs/gh; fi',
-      'FOO=/usr/bin/gh ls',
+      'CACHE_DIR=/x/gh ls',
+      'export BUILD_ROOT=/x/gh',
+      'export XDG_CACHE_HOME=/x/gh',
+      'TMPDIR=/x/opencode ls',
+      'TMPPREFIX=/x/opencode/zsh; ls',
+      'declare -x BUILD_DIR=/x/gh',
+      'local SRC_HOME=/x/gh',
+      'git add docs/gh',
+      'git restore docs/gh',
       'python3 x.py --tool=docker',
     ])('allows %j', (command) => {
       expect(verdict(command, config()), command).toBe('allow');
@@ -356,6 +365,31 @@ describe('path and assignment arguments that end in a denied name (#7)', () => {
       'git -c core.pager=/usr/bin/gh log',
       'git difftool --extcmd=/usr/bin/gh',
       'tar --use-compress-program=/usr/bin/gh -cf x.tar .',
+      // a variable that holds a program path: the guard does not follow shell state to a later `$VAR`
+      'FOO=/usr/bin/gh ls',
+      'export GHBIN=/usr/bin/gh',
+      'X=/usr/bin/gh',
+      'X=/usr/bin/gh; ls',
+      'local B=/usr/bin/gh',
+      'declare -x T=/x/gh',
+      'readonly GH=/x/gh',
+      'typeset G=/x/gh',
+      'export lower_dir=/x/gh',
+      'export ls_cache=/x/gh',
+      'export GIT_DIR=/x/gh',
+      'export PAGER_DIR=/x/gh',
+      'export EDITOR_HOME=/x/gh',
+      'export SHELL_ROOT=/x/gh',
+      'export NPM_CONFIG_CACHE=/x/gh',
+      'ls GHBIN=/usr/bin/gh',
+      // git subcommands that take paths never get to name a program
+      'git checkout --tool=/x/gh',
+      'git add --exec=/x/gh',
+      'git log --upload-pack=/x/gh',
+      'git log --receive-pack=/x/gh',
+      'git diff --extcmd=/x/gh',
+      'git add -x /x/gh',
+      'git add --exec-path=/x/gh',
       // exec-hook assignments
       'PAGER=/usr/bin/gh git log',
       'GIT_PAGER=/usr/bin/gh git log',
@@ -419,6 +453,59 @@ describe('path and assignment arguments that end in a denied name (#7)', () => {
     expect(checkShellCommand('eval ls docs/gh', cfg)).toMatch(/gh is forbidden/);
     expect(checkShellCommand('ls docs/gh', cfg)).toBeNull();
     expect(checkShellCommand('ls docs/gh', cfg, 1)).toMatch(/gh is forbidden/);
+  });
+});
+
+describe('non-ASCII whitespace and control characters (#7)', () => {
+  const REASON = /non-ASCII whitespace or control characters are refused; retype the command with plain spaces/;
+  const ODD: Array<[string, string]> = [
+    ['NBSP', '\u00a0'],
+    ['em space U+2003', '\u2003'],
+    ['ideographic space U+3000', '\u3000'],
+    ['zero-width space U+200B', '\u200b'],
+    ['vertical tab', '\u000b'],
+    ['form feed', '\u000c'],
+    ['BOM', '\ufeff'],
+    ['line separator U+2028', '\u2028'],
+    ['NUL', '\u0000'],
+    ['ESC', '\u001b'],
+  ];
+
+  it.each(ODD)('refuses a command with %s, quickly, with a clear reason', (_name, ch) => {
+    for (const command of [`ls${ch}docs`, `ls docs${ch}`, `${ch}ls docs`, `echo a; ls${ch}docs/gh`]) {
+      const started = performance.now();
+      const why = checkShellCommand(command, cfg);
+      const verdict = decide({ tool: 'shell', input: { command } }, cfg);
+      expect(performance.now() - started, JSON.stringify(command)).toBeLessThan(50);
+      expect(why, JSON.stringify(command)).toMatch(REASON);
+      expect(verdict.verdict).toBe('block');
+      expect((verdict as { reason?: string }).reason).toMatch(REASON);
+    }
+  });
+
+  it('refuses it at every depth (inner strings are checked too)', () => {
+    expect(checkShellCommand('ls\u00a0docs', cfg, 3)).toMatch(REASON);
+    expect(checkShellCommand("sh -c 'ls\u00a0docs'", cfg)).toMatch(REASON);
+  });
+
+  it('refuses it inside a heredoc body or a quoted string too', () => {
+    expect(checkShellCommand("cat <<'EOF'\na\u00a0b\nEOF", cfg)).toMatch(REASON);
+    expect(checkShellCommand('echo "a\u200bb"', cfg)).toMatch(REASON);
+  });
+
+  it('still allows ordinary non-ASCII text, tabs, CR and newlines', () => {
+    expect(checkShellCommand('echo "héllo wörld — ✓"', cfg)).toBeNull();
+    expect(checkShellCommand('ls\tdocs\r\nls docs', cfg)).toBeNull();
+  });
+
+  it('tokenize() always terminates: any whitespace ends a word and is skipped', () => {
+    for (const [, ch] of ODD) {
+      const started = performance.now();
+      const toks = tokenize(`ls${ch}docs${ch}${ch}x`);
+      expect(performance.now() - started).toBeLessThan(50);
+      expect(toks.length).toBeLessThan(10);
+    }
+    expect(tokenize('ls\u00a0docs').map((t) => (t.t === 'word' ? t.v : t.t))).toEqual(['ls', 'docs']);
   });
 });
 
