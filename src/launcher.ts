@@ -7,12 +7,27 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { cliInvocation, type CliDeps, type ExecFn } from './cli-deps.ts';
-import { isNeverStartedFailure, isTerminalRunState, RUN_MANIFEST_VERSION, RunContextSnapshot, RunManifest, type RepoEntry } from './contracts.ts';
+import { cliInvocation, type CliDeps, type ExecFn, type ExecResult, type LockHandle } from './cli-deps.ts';
+import { attemptsOf, isNeverStartedFailure, isTerminalRunState, RUN_MANIFEST_VERSION, RunContextSnapshot, RunManifest, TaskEvent, type RepoEntry } from './contracts.ts';
 import { doctor, formatDoctor, formatWarning, hardFailures, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { assertSlug, isValidSlug, recordedControlDir, recordedLaunchdLabel, runPaths, type RunPaths } from './paths.ts';
 import { buildJobEnv, buildProgramArgs, launchdLabel, renderPlist } from './plist.ts';
+import {
+  buildResumeManifest,
+  buildRollbackManifest,
+  checkResumeEligibility,
+  checkWorktrees,
+  closeLastAttempt,
+  formatWorktreeProblems,
+  hasOpenAttempt,
+  inspectWorktreeFs,
+  isResumableState,
+  parseResumeBudget,
+  STOPPED_AFTER_CRASH,
+  type ResumeEligibility,
+} from './resume.ts';
 import { loadSpec, type SpecMeta } from './specmeta.ts';
+import { readJsonl, StateError } from './state.ts';
 
 /** The frozen run context in the (agent-unwritable) control dir. */
 
@@ -295,6 +310,10 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
     // 6. The frozen run context, then RUN.json (v2) in state `launching`. The orchestrator never re-resolves the profile:
     // it reads only this snapshot, which the agent cannot write (control dir). One writer per launch.
     await deps.writeRunContext(paths.controlDir, runContext);
+    // A control dir left by an earlier run of the same slug (a launch that failed before it started) may still carry its stop
+    // flags, and the orchestrator fails the attempt on a stale one: clear them, and nothing else. Its stale `xdg-data` stays,
+    // so the ledger can over-count the cost of the new run, which is the safe direction.
+    await deps.resetStopFlags?.(paths.controlDir);
     manifest = buildLaunchManifest({
       slug,
       budgetUsd: input.budgetUsd,
@@ -360,6 +379,220 @@ export async function launch(input: LaunchInput): Promise<LaunchResult> {
 }
 
 // ---------------------------------------------------------------------------
+// resume
+// ---------------------------------------------------------------------------
+
+export interface ResumeInput {
+  slug: string;
+  /** The extra budget of the new attempt, in USD. Required: there is no default. */
+  budgetUsd: number;
+  deps: CliDeps;
+  exec: ExecFn;
+  fs?: DoctorFs;
+  io?: LauncherIo;
+  /** Parent environment to filter the job env from. Default `process.env`. */
+  parentEnv?: Record<string, string | undefined>;
+  /** Pid recorded in the manifest and the lock. Default `process.pid`. */
+  pid?: number;
+  /** Testing: wait between the polls after a `launchctl bootout`. Default: real timers. */
+  sleep?: (ms: number) => Promise<void>;
+  /** How long to wait for a booted-out job to disappear. Default 10 s. */
+  bootoutWaitMs?: number;
+}
+
+export interface ResumeResult extends LaunchResult {
+  attempt: number;
+}
+
+const nodeFs = {
+  exists: (p: string): boolean => existsSync(p),
+  readText: (p: string): string | undefined => {
+    try {
+      return readFileSync(p, 'utf8');
+    } catch {
+      return undefined;
+    }
+  },
+};
+
+/** Turn a lock failure into a refusal that says what to do about it. */
+function lockRefusal(err: unknown, slug: string, cli: string): Error {
+  if (err instanceof StateError && err.code === 'lock-held') {
+    if (err.pid !== undefined) {
+      return new Error(
+        `Another process (pid ${err.pid}) holds the run lock, so "${slug}" is not resumed. If it is a run, check it with "${cli} status" ` +
+          `and wait for it or stop it ("${cli} stop <slug>"); if it is a stuck process, end it and try again.`,
+      );
+    }
+    return new Error('The run lock file is being written by another process, or is unreadable and younger than 5 s. Try again in a few seconds; an unreadable lock older than that is taken over.');
+  }
+  return new Error(`Cannot take the run lock: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+/**
+ * `resume`: continue a stopped, over-budget, failed or stalled run as a new attempt with `--budget` extra to spend.
+ *
+ * Order, so that nothing is written before every check has passed and no attempt is ever left open:
+ *  1. eligibility from RUN.json (no side effects), the frozen run context, the worktree check;
+ *  2. the run lock (a dead holder is taken over, a live one refused), then eligibility again (a racing resume may have won);
+ *  3. a running launchd job is refused, a loaded one that is not running is booted out and checked again;
+ *  4. the shared gates (doctor, remotes, preflight, ...) on the FROZEN run context, and the tripwire baseline;
+ *  5. one manifest write (state `launching`, a new open attempt), the stop flags reset, the plist, the bootstrap;
+ *  6. any failure after the manifest write restores the previous manifest and closes the new attempt as `failed`.
+ * The lock stays with the CLI pid on success; the orchestrator takes it over (same handoff as `launch`).
+ */
+export async function resume(input: ResumeInput): Promise<ResumeResult> {
+  const { deps, exec } = input;
+  const io = input.io ?? defaultIo;
+  const slug = assertSlug(input.slug);
+  const budgetUsd = parseResumeBudget(input.budgetUsd);
+  const cli = cliInvocation(deps.nodePath);
+  const pid = input.pid ?? process.pid;
+
+  const readEligible = async (): Promise<Extract<ResumeEligibility, { ok: true }>> => {
+    let manifest: RunManifest | undefined;
+    try {
+      manifest = await deps.readManifest(slug);
+    } catch (e) {
+      throw new Error(`Run "${slug}" has a RUN.json that cannot be read, so it cannot be resumed: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`);
+    }
+    const eligible = checkResumeEligibility({ slug, manifest, cli });
+    if (!eligible.ok) throw new Error(eligible.message);
+    return eligible;
+  };
+
+  // 1. nothing is written or touched yet
+  let eligible = await readEligible();
+  const { readRunContext, resetStopFlags } = deps;
+  if (!readRunContext || !resetStopFlags) throw new Error('resume is not wired in these dependencies (readRunContext / resetStopFlags are missing)');
+  const manifest0 = eligible.manifest;
+  let runContext: RunContextSnapshot;
+  try {
+    runContext = RunContextSnapshot.parse(await readRunContext.call(deps, eligible.controlDir));
+  } catch (e) {
+    throw new Error(`Cannot resume "${slug}": its frozen run context cannot be read (${e instanceof Error ? e.message.split('\n')[0] : String(e)}).`);
+  }
+  if (runContext.workspaceRoot !== manifest0.workspaceRoot) {
+    throw new Error(`Cannot resume "${slug}": its frozen run context is for the workspace ${runContext.workspaceRoot}, but RUN.json records ${manifest0.workspaceRoot}.`);
+  }
+  const paths = runPaths(slug, { home: deps.home, workspaceRoot: manifest0.workspaceRoot });
+  const events = readJsonl(paths.tasksJsonl, TaskEvent).items;
+  const problems = await checkWorktrees({ slug, repos: manifest0.repos, events, inspect: (p) => inspectWorktreeFs(p, nodeFs) });
+  if (problems.length > 0) throw new Error(formatWorktreeProblems(slug, problems));
+
+  // 2. the lock
+  let lock: LockHandle;
+  try {
+    lock = await deps.acquireLock(slug);
+  } catch (e) {
+    throw lockRefusal(e, slug, cli);
+  }
+
+  let started: { attempts: ReturnType<typeof attemptsOf>; next: RunManifest } | undefined;
+  let bootstrapped = false;
+  const label = eligible.label;
+  try {
+    eligible = await readEligible(); // a resume that raced us may have written already (the state is then `launching`)
+
+    // 3. the job: a running one is never touched; a stale one must be gone before the new one is bootstrapped
+    const job = await jobState(exec, deps.uid, label);
+    if (job.running) {
+      throw new Error(`The launchd job ${label} is running although RUN.json says the run is ${eligible.manifest.state}. Check it with "${cli} status ${slug}" and stop it with "${cli} stop ${slug}" first.`);
+    }
+    if (job.loaded) {
+      const r = await bootout(exec, deps.uid, label);
+      const sleep = input.sleep ?? ((ms: number) => new Promise<void>((done) => setTimeout(done, ms)));
+      const waitMs = input.bootoutWaitMs ?? 10_000;
+      let waited = 0;
+      let after = await jobState(exec, deps.uid, label);
+      while (after.loaded && waited < waitMs) {
+        await sleep(500);
+        waited += 500;
+        after = await jobState(exec, deps.uid, label);
+      }
+      if (after.running) throw new Error(`The launchd job ${label} started running again; not resuming. Check it with "${cli} status ${slug}".`);
+      if (after.loaded) {
+        throw new Error(`The stale launchd job ${label} is still loaded after bootout${r.exitCode === 0 ? '' : ` (exit ${r.exitCode}: ${(r.stderr || r.stdout).trim()})`}. Run "launchctl bootout gui/${deps.uid}/${label}" and try again.`);
+      }
+      io.out(`Booted out the stale launchd job ${label}.`);
+    }
+
+    // 4. the shared gates, on the frozen context. We hold the lock ourselves, so the doctor's "lock is free" check is moot.
+    const run = eligible.manifest;
+    const gates = await runLaunchGates({
+      slug,
+      repos: run.repos.length > 0 ? run.repos.map((r) => r.path) : undefined,
+      deps: { ...deps, lockIsFree: async () => true },
+      exec,
+      fs: input.fs,
+      io,
+      parentEnv: input.parentEnv,
+      runContext,
+    });
+    const repos = await deps.buildBaseline(gates.spec.repos.map((r) => r.path));
+
+    // 5. the one manifest write
+    const next = buildResumeManifest({ manifest: run, attempts: eligible.attempts, budgetUsd, now: deps.now().toISOString(), pid, repos });
+    started = { attempts: eligible.attempts, next };
+    await deps.writeManifest(slug, next);
+    try {
+      await resetStopFlags.call(deps, eligible.controlDir);
+      const plistPath = join(eligible.controlDir, `${label}.plist`);
+      const plist = renderPlist({
+        label,
+        programArgs: buildProgramArgs({ nodePath: deps.nodePath, orchestratorEntry: deps.orchestratorEntry, slug }),
+        env: buildJobEnv({
+          parentEnv: input.parentEnv ?? process.env,
+          home: deps.home,
+          nodePath: deps.nodePath,
+          opencodePath: gates.opencodePath,
+          gitPath: gates.gitPath,
+        }),
+        stdout: join(eligible.controlDir, 'launchd.out.log'),
+        stderr: join(eligible.controlDir, 'launchd.err.log'),
+        workingDir: paths.runDir,
+      });
+      writeFileSync(plistPath, plist, { mode: 0o600 });
+      chmodSync(plistPath, 0o600);
+      bootstrapped = true; // from here a half-loaded job is possible
+      const boot = await exec('launchctl', ['bootstrap', domain(deps.uid), plistPath]);
+      if (boot.exitCode !== 0) throw new Error(`launchctl bootstrap failed (exit ${boot.exitCode}): ${(boot.stderr || boot.stdout).trim()}`);
+
+      const attempt = next.attempts?.at(-1)?.n ?? 0;
+      io.out(`Resumed ${slug} as attempt ${attempt} (${label}), budget $${budgetUsd.toFixed(2)} on top of $${run.costUsd.toFixed(2)} spent`);
+      io.out(`  log:    ${paths.orchestratorLog}`);
+      io.out(`  status: ${cli} status ${slug}`);
+      io.out(`  report: ${paths.reportMd}`);
+      return { label, plistPath, manifest: next, attempt };
+    } catch (err) {
+      // The manifest says `launching` with an open attempt, and no orchestrator will ever close it: put the previous terminal
+      // state back and keep the new attempt as a failed one. No attempt may stay open.
+      const notes: string[] = [];
+      if (bootstrapped) {
+        try {
+          await bootout(exec, deps.uid, label); // we verified nothing was loaded under the lock, so anything loaded now is ours
+        } catch {
+          notes.push('the launchd job may still be loaded');
+        }
+      }
+      try {
+        await deps.writeManifest(
+          slug,
+          buildRollbackManifest({ previous: run, attempts: eligible.attempts, started: next.attempts!.at(-1)!, now: deps.now().toISOString() }),
+        );
+      } catch (rollbackErr) {
+        notes.push(`RUN.json could not be restored (${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}); run "${cli} stop ${slug}" to close the attempt`);
+      }
+      const base = err instanceof Error ? err.message : String(err);
+      throw new Error(notes.length > 0 ? `${base} (resume rolled back; ${notes.join('; ')})` : `${base} (resume rolled back: ${slug} is ${run.state} again)`, { cause: err });
+    }
+  } catch (err) {
+    await lock.release();
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // stop
 // ---------------------------------------------------------------------------
 
@@ -370,6 +603,10 @@ export interface StopInput {
   io?: LauncherIo;
 }
 
+async function bootout(exec: ExecFn, uid: number, label: string): Promise<ExecResult> {
+  return exec('launchctl', ['bootout', `${domain(uid)}/${label}`]);
+}
+
 export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 'already-terminal'> {
   const { deps, exec } = input;
   const io = input.io ?? defaultIo;
@@ -377,6 +614,16 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
   const manifest = await deps.readManifest(slug);
   if (!manifest) throw new Error(`No run found for "${slug}"`);
   if (isTerminalRunState(manifest.state)) {
+    // A resumable run whose last attempt never got closed (a crash, or an older version's stop) would make `resume` refuse
+    // with no way out: close that attempt here, as the manifest says it ended. A launch that never started has none to close.
+    if (isResumableState(manifest.state) && !isNeverStartedFailure(manifest) && hasOpenAttempt(manifest)) {
+      recordedControlDir(manifest, slug);
+      const endedAt = manifest.endedAt ?? deps.now().toISOString();
+      const attempts = closeLastAttempt(manifest, { endedAt, state: manifest.state, stopReason: manifest.stopReason });
+      await deps.writeManifest(slug, { ...manifest, endedAt, attempts });
+      io.out(`Run ${slug} is already ${manifest.state}; closed its open attempt ${attempts.at(-1)?.n ?? 1}. It can be resumed.`);
+      return 'stopped';
+    }
     io.out(`Run ${slug} is already ${manifest.state}.`);
     return 'already-terminal';
   }
@@ -389,16 +636,27 @@ export async function stop(input: StopInput): Promise<'signalled' | 'stopped' | 
     io.out(`SIGTERM sent to ${label}. The orchestrator aborts all sessions and writes REPORT.md.`);
     return 'signalled';
   }
-  // Job not running: nobody will write the report, so do it here.
-  const reportPath = await deps.writeReport(slug);
-  await deps.writeManifest(slug, {
-    ...manifest,
-    state: 'stopped',
-    endedAt: deps.now().toISOString(),
-    stopReason: 'stopped by user (launchd job was not running)',
-  });
-  await deps.releaseLock(slug);
-  io.out(`Job ${label} was not running. Marked ${slug} as stopped. Report: ${reportPath}`);
+  // Job not running: the orchestrator is gone (it crashed, or never started), so nobody will close the attempt or write the
+  // report. Do it here: `crash -> stop -> resume` is the documented path, and resume refuses an open attempt.
+  const endedAt = deps.now().toISOString();
+  const attempts = closeLastAttempt(manifest, { endedAt, state: 'stopped', stopReason: STOPPED_AFTER_CRASH });
+  await deps.writeManifest(slug, { ...manifest, state: 'stopped', endedAt, stopReason: STOPPED_AFTER_CRASH, attempts });
+  const warnings: string[] = [];
+  if (job.loaded) {
+    const r = await bootout(exec, deps.uid, label);
+    if (r.exitCode !== 0) warnings.push(`warning: launchctl bootout of ${label} failed (exit ${r.exitCode}): ${(r.stderr || r.stdout).trim()}`);
+  }
+  // only a lock whose holder is dead (or absent) is released; a live process keeps what it holds
+  if (await deps.lockIsFree()) await deps.releaseLock(slug);
+  else warnings.push('warning: the run lock is held by a live process, so it was left alone');
+  let reportNote = '';
+  try {
+    reportNote = ` Report: ${await deps.writeReport(slug)}`;
+  } catch (e) {
+    warnings.push(`warning: could not write the report: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  for (const w of warnings) (io.err ?? console.error)(w);
+  io.out(`Job ${label} was not running. Marked ${slug} as stopped (${STOPPED_AFTER_CRASH}) and closed its attempt.${reportNote}`);
   return 'stopped';
 }
 
@@ -420,6 +678,26 @@ export interface StatusInput {
   io?: LauncherIo;
 }
 
+/**
+ * What `status` shows as spend. A single-attempt run: the cumulative cost over the budget, as always. After a resume: the
+ * open or last attempt's spend over that attempt's budget (the thresholds work the same way), and `attempt` says which one.
+ */
+function costSummary(m: RunManifest): { spendUsd: number; budgetUsd: number; pct: number; attempt?: { n: number; budgetUsd: number } } {
+  const attempts = attemptsOf(m);
+  const last = attempts.at(-1);
+  if (attempts.length <= 1 || !last) {
+    return { spendUsd: m.costUsd, budgetUsd: m.budgetUsd, pct: m.budgetUsd > 0 ? (m.costUsd / m.budgetUsd) * 100 : 0 };
+  }
+  // the live attempt spend is recorded on the attempt; before the first write of an attempt it is what the run spent since it began
+  const spendUsd = last.costUsd ?? Math.max(0, m.costUsd - last.costAtStartUsd);
+  return {
+    spendUsd,
+    budgetUsd: last.budgetUsd,
+    pct: last.budgetUsd > 0 ? (spendUsd / last.budgetUsd) * 100 : 0,
+    attempt: { n: last.n, budgetUsd: last.budgetUsd },
+  };
+}
+
 export const HEARTBEAT_STALE_MS = 2 * 60 * 1000;
 
 async function printRunStatus(slug: string, deps: CliDeps, io: LauncherIo): Promise<void> {
@@ -431,7 +709,7 @@ async function printRunStatus(slug: string, deps: CliDeps, io: LauncherIo): Prom
   const paths = runPaths(slug, { home: deps.home, workspaceRoot: m.workspaceRoot });
   const checkedControlDir = recordedControlDir(m, slug);
   const flags = await deps.readControlFlags(checkedControlDir);
-  const pct = m.budgetUsd > 0 ? (m.costUsd / m.budgetUsd) * 100 : 0;
+  const cost = costSummary(m);
   let heartbeat = 'never';
   if (flags && flags.heartbeatTs > 0) {
     const age = deps.now().getTime() - flags.heartbeatTs;
@@ -440,7 +718,8 @@ async function printRunStatus(slug: string, deps: CliDeps, io: LauncherIo): Prom
   io.out(`Run:        ${slug}`);
   io.out(`State:      ${m.state}`);
   io.out(`Phase:      ${m.phase}`);
-  io.out(`Cost:       $${m.costUsd.toFixed(2)} / $${m.budgetUsd.toFixed(2)} (${pct.toFixed(1)}%)`);
+  if (cost.attempt) io.out(`Attempt:    ${cost.attempt.n} (budget $${cost.attempt.budgetUsd.toFixed(2)})`);
+  io.out(`Cost:       $${cost.spendUsd.toFixed(2)} / $${cost.budgetUsd.toFixed(2)} (${cost.pct.toFixed(1)}%)${cost.attempt ? `  run total $${m.costUsd.toFixed(2)}` : ''}`);
   io.out(`Sessions:   ${m.knownSessionIds.length}`);
   io.out(`Heartbeat:  ${heartbeat}`);
   io.out(`Server:     ${m.serverUrl ?? 'not started'}`);
@@ -487,8 +766,11 @@ export async function status(input: StatusInput): Promise<void> {
       continue;
     }
     if (!m) continue;
-    const pct = m.budgetUsd > 0 ? (m.costUsd / m.budgetUsd) * 100 : 0;
-    io.out(`${name}  ${m.state}  ${m.phase}  $${m.costUsd.toFixed(2)}/$${m.budgetUsd.toFixed(2)} (${pct.toFixed(0)}%)`);
+    const cost = costSummary(m);
+    io.out(
+      `${name}  ${m.state}  ${m.phase}  $${cost.spendUsd.toFixed(2)}/$${cost.budgetUsd.toFixed(2)} (${cost.pct.toFixed(0)}%)` +
+        (cost.attempt ? `  attempt ${cost.attempt.n}, run total $${m.costUsd.toFixed(2)}` : ''),
+    );
     shown++;
   }
   if (shown === 0) io.out('No runs found.');

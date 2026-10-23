@@ -1,5 +1,5 @@
 /**
- * nightgem CLI: `launch | status | stop | report | doctor [--audit-repo] | profile path|show|validate | render | install | uninstall`.
+ * nightgem CLI: `launch | resume | status | stop | report | doctor [--audit-repo] | profile path|show|validate | render | install | uninstall`.
  *
  * `main` runs against the real dependencies from `src/wiring.ts` (`realCliDeps`). Use `buildProgram(deps)` to inject
  * deps (tests).
@@ -18,7 +18,7 @@ import type { RepoEntry } from './contracts.ts';
 import { runGitSafe } from './gitsafe.ts';
 import { doctor, formatDoctor, hasHardFailure, type DoctorFs, type DoctorOptions } from './doctor.ts';
 import { InstallError, installCommands, uninstallCommands } from './install.ts';
-import { buildLaunchManifest, launch, report, resolveJobPath, settleRunContext, status, stop, type LauncherIo } from './launcher.ts';
+import { buildLaunchManifest, launch, report, resolveJobPath, resume, settleRunContext, status, stop, type LauncherIo } from './launcher.ts';
 import { launchdLabel } from './plist.ts';
 import { assertSlug, runPaths } from './paths.ts';
 import { assertSafeOutDir, realRenderers, renderRunArtifacts, writeRenderedFiles } from './render.ts';
@@ -115,6 +115,14 @@ export function buildProgram(opts: ProgramOptions): Command {
     });
 
   program
+    .command('resume <slug>')
+    .description('Continue a stopped, over-budget, failed or stalled run as a new attempt, with --budget extra to spend')
+    .requiredOption('--budget <usd>', 'extra budget in USD for the new attempt (required; added on top of what was already spent)', parseNumber('--budget'))
+    .action(async (slug: string, o: { budget: number }) => {
+      await resume({ slug, budgetUsd: o.budget, deps, exec, fs, io });
+    });
+
+  program
     .command('status [slug]')
     .description('Show run state, cost and attach instructions (all runs when no slug)')
     .action(async (slug?: string) => {
@@ -123,7 +131,7 @@ export function buildProgram(opts: ProgramOptions): Command {
 
   program
     .command('stop <slug>')
-    .description('Stop a run (SIGTERM via launchctl); the orchestrator writes the report')
+    .description('Stop a run (SIGTERM via launchctl); the orchestrator writes the report. A run whose job is gone (a crash) is closed here, so it can be resumed')
     .action(async (slug: string) => {
       await stop({ slug, deps, exec, io });
     });

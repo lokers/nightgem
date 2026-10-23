@@ -15,7 +15,7 @@ import { APP, ENV_PREFIX, TMP_PREFIX } from './brand.ts';
 import { realExec, type CliDeps, type DoctorCheck, type ExecFn } from './cli-deps.ts';
 import { BudgetLedger } from './budget.ts';
 import { isRunApiError, type RunClient } from './client.ts';
-import { attemptsOf, CostLine, parseModelRef, RepoEntry, RunContextSnapshot, type RunManifest, type SafetyInputs } from './contracts.ts';
+import { attemptsOf, ControlFlags, CostLine, parseModelRef, RepoEntry, RunContextSnapshot, type RunManifest, type SafetyInputs } from './contracts.ts';
 import { createEventPump, realClock } from './events.ts';
 import { currentBranch, defaultGit, headSha, type GitRunner } from './gitinfo.ts';
 import { runGitSafe } from './gitsafe.ts';
@@ -46,6 +46,7 @@ import {
   releaseLock,
   readJsonl,
   readManifest,
+  writeControlFlags,
   writeManifest,
   StateError,
 } from './state.ts';
@@ -599,6 +600,9 @@ export function realCliDeps(home: string = homedir(), opts: WiringOptions = {}):
     writeRunContext(dir, snap) {
       writeRunContext(dir, snap);
     },
+    async readRunContext(dir) {
+      return readRunContext(dir);
+    },
     renderers: realRenderers,
 
     async readManifest(slug) {
@@ -620,6 +624,17 @@ export function realCliDeps(home: string = homedir(), opts: WiringOptions = {}):
       } catch {
         return undefined;
       }
+    },
+
+    async resetStopFlags(dir) {
+      if (!existsSync(controlFlagsPath(dir))) return; // nothing was ever set
+      let flags: ControlFlags;
+      try {
+        flags = readControlFlags(dir);
+      } catch {
+        flags = ControlFlags.parse({}); // an unreadable file cannot be trusted to hold anything worth keeping
+      }
+      writeControlFlags(dir, { ...flags, softStop: false, hardStop: false });
     },
 
     async acquireLock(slug) {

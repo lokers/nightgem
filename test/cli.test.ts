@@ -9,13 +9,13 @@ import { buildProgram } from '../src/cli.ts';
 import { cliInvocation, realExec } from '../src/cli-deps.ts';
 import { realCliDeps } from '../src/wiring.ts';
 import type { CliDeps, ExecFn, ExecResult } from '../src/cli-deps.ts';
-import { parseRunManifest, RunContextSnapshot, RunManifest } from '../src/contracts.ts';
+import { attemptsOf, parseRunManifest, RunContextSnapshot, RunManifest } from '../src/contracts.ts';
 import { launch, report, status, stop } from '../src/launcher.ts';
 import { realRenderers } from '../src/render.ts';
 import { writeRunContext } from '../src/wiring.ts';
 import { runPaths } from '../src/paths.ts';
 import { writeReport } from '../src/report.ts';
-import { readManifest, writeControlFlags } from '../src/state.ts';
+import { defaultLockPath, readControlFlags, readManifest, writeControlFlags } from '../src/state.ts';
 import { makeRunContext } from './fixtures/run-context.ts';
 
 const SLUG = 'demo-run';
@@ -60,6 +60,10 @@ function makeExec(env: ExecEnv = {}): ExecFn {
       const exitCode = env.bootstrapExit ?? 0;
       return { stdout: '', stderr: exitCode ? 'Bootstrap failed: 5' : '', exitCode };
     }
+    if (cmd === 'launchctl' && args[0] === 'bootout') {
+      log.push(`exec:launchctl bootout ${args[1]}`);
+      return ok();
+    }
     if (cmd === 'launchctl' && args[0] === 'kill') {
       log.push(`exec:launchctl kill ${args.slice(1).join(' ')}`);
       return ok();
@@ -89,6 +93,8 @@ function makeDeps(over: Partial<CliDeps> = {}): CliDeps {
       writeRunContext(runPaths(SLUG, { home, workspaceRoot }).controlDir, snap);
     },
     readControlFlags: async () => ({ softStop: false, hardStop: false, heartbeatTs: NOW.getTime() - 30_000 }),
+    resetStopFlags: (dir) => realCliDeps(home).resetStopFlags!(dir),
+    readRunContext: (dir) => realCliDeps(home).readRunContext!(dir),
     acquireLock: async () => {
       log.push('deps:acquireLock');
       return { release: async () => void log.push('deps:release') };
@@ -437,7 +443,7 @@ describe('report and commander surface', () => {
 
   it('requires --budget and exposes all subcommands', async () => {
     const program = buildProgram({ deps: makeDeps() });
-    expect(program.commands.map((c) => c.name()).sort()).toEqual(['doctor', 'install', 'launch', 'profile', 'render', 'report', 'status', 'stop', 'uninstall']);
+    expect(program.commands.map((c) => c.name()).sort()).toEqual(['doctor', 'install', 'launch', 'profile', 'render', 'report', 'resume', 'status', 'stop', 'uninstall']);
     await expect(program.parseAsync(['launch', SLUG], { from: 'user' })).rejects.toThrow(/--budget/);
   });
 
@@ -903,5 +909,256 @@ describe('name-agnostic run lookup (AD3)', () => {
     await expect(status({ slug: SLUG, deps: makeDeps(), io: io() })).rejects.toThrow(msg);
     await expect(stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'running' }), io: io() })).rejects.toThrow(msg);
     expect(log.some((l) => l.startsWith('exec:launchctl kill'))).toBe(false);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// #9 resume: stop on a crashed run, status with attempts, the stale control dir, --budget parsing
+// ---------------------------------------------------------------------------
+
+const DEAD_PID = 99_999_999;
+
+function writeLockFile(pid: number, slug = SLUG): string {
+  const lockPath = defaultLockPath(home);
+  mkdirSync(join(lockPath, '..'), { recursive: true });
+  writeFileSync(lockPath, `${JSON.stringify({ pid, token: 'tok', ts: NOW.toISOString(), slug })}\n`);
+  return lockPath;
+}
+
+/** Deps with the REAL lock (state.ts) under the temp HOME. */
+function realLockDeps(over: Partial<CliDeps> = {}): CliDeps {
+  const real = realCliDeps(home);
+  return makeDeps({ acquireLock: (s) => real.acquireLock(s), releaseLock: (s) => real.releaseLock(s), lockIsFree: () => real.lockIsFree(), ...over });
+}
+
+describe('stop on a run whose job is not running (crash -> stop -> resume)', () => {
+  const openAttempt = { n: 1, startedAt: '2026-10-21T21:00:00.000Z', budgetUsd: 100, costAtStartUsd: 0, costUsd: 37.25 };
+
+  it('closes the open attempt, marks the run stopped-after-crash and keeps the recorded attempt cost', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    const r = await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    expect(r).toBe('stopped');
+    const m = manifests.get(SLUG)!;
+    expect(m).toMatchObject({ state: 'stopped', endedAt: NOW.toISOString(), stopReason: 'stopped-after-crash', costUsd: 42.5 });
+    expect(m.attempts).toEqual([{ ...openAttempt, endedAt: NOW.toISOString(), state: 'stopped', stopReason: 'stopped-after-crash', costUsd: 37.25 }]);
+    expect(log.filter((l) => l === 'deps:writeManifest stopped')).toHaveLength(1);
+    expect(log).toContain('deps:writeReport');
+  });
+
+  it('writes out the implicit attempt of a manifest without attempts, closed', async () => {
+    seedManifest();
+    await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    const m = manifests.get(SLUG)!;
+    expect(m.attempts).toHaveLength(1);
+    expect(m.attempts![0]).toMatchObject({ n: 1, state: 'stopped', stopReason: 'stopped-after-crash', endedAt: NOW.toISOString(), costUsd: 42.5 });
+  });
+
+  it('never lowers a recorded cost: an attempt cost above what is cumulative stays', async () => {
+    seedManifest({ costUsd: 10, attempts: [{ ...openAttempt, costUsd: 12 }] });
+    await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    expect(manifests.get(SLUG)!.attempts![0]!.costUsd).toBe(12);
+  });
+
+  it('fills a missing attempt cost from what the run spent since the attempt began', async () => {
+    seedManifest({ costUsd: 42.5, attempts: [{ n: 1, startedAt: openAttempt.startedAt, budgetUsd: 100, costAtStartUsd: 0, endedAt: '2026-10-21T21:30:00.000Z', state: 'stopped' }, { n: 2, startedAt: '2026-10-21T21:40:00.000Z', budgetUsd: 5, costAtStartUsd: 30 }] });
+    await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    const attempts = manifests.get(SLUG)!.attempts!;
+    expect(attempts[0]!.endedAt).toBe('2026-10-21T21:30:00.000Z'); // the closed one is untouched
+    expect(attempts[1]).toMatchObject({ n: 2, state: 'stopped', costUsd: 12.5 });
+  });
+
+  it('boots out a loaded job that is not running', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'loaded' }), io: io() });
+    expect(log).toContain(`exec:launchctl bootout gui/501/com.example.nightgem.${SLUG}`);
+    expect(log.some((l) => l.startsWith('exec:launchctl kill'))).toBe(false);
+  });
+
+  it('does not touch launchd bootout when no job is loaded', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    expect(log.some((l) => l.includes('bootout'))).toBe(false);
+  });
+
+  it('releases a lock held by a dead pid', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    const lockPath = writeLockFile(DEAD_PID);
+    await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: io() });
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it('leaves a lock held by a live process alone, and says so', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    const lockPath = writeLockFile(process.ppid);
+    const errs: string[] = [];
+    await stop({ slug: SLUG, deps: realLockDeps(), exec: makeExec({ jobState: 'absent' }), io: { out: (l) => void lines.push(l), err: (l) => void errs.push(l) } });
+    expect(existsSync(lockPath)).toBe(true);
+    expect(errs.join('\n')).toMatch(/lock is held by a live process/);
+    expect(manifests.get(SLUG)!.state).toBe('stopped');
+  });
+
+  it('a failing report does not undo the stop', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    const errs: string[] = [];
+    const deps = makeDeps({ writeReport: async () => { throw new Error('report boom'); } });
+    await stop({ slug: SLUG, deps, exec: makeExec({ jobState: 'absent' }), io: { out: (l) => void lines.push(l), err: (l) => void errs.push(l) } });
+    expect(manifests.get(SLUG)!.state).toBe('stopped');
+    expect(errs.join('\n')).toContain('report boom');
+  });
+
+  it('a stopped run whose attempt is still open (older stop) gets that attempt closed, so it can be resumed', async () => {
+    seedManifest({ state: 'stopped', endedAt: '2026-10-21T21:50:00.000Z', stopReason: 'stopped by user (launchd job was not running)', attempts: [openAttempt] });
+    const r = await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec(), io: io() });
+    expect(r).toBe('stopped');
+    expect(manifests.get(SLUG)!.attempts![0]).toMatchObject({ endedAt: '2026-10-21T21:50:00.000Z', state: 'stopped' });
+    expect(manifests.get(SLUG)!.stopReason).toMatch(/older|launchd job was not running/);
+  });
+
+  it('a completed run is left alone, even with no endedAt', async () => {
+    seedManifest({ state: 'completed' });
+    expect(await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec(), io: io() })).toBe('already-terminal');
+    expect(log).not.toContain('deps:writeManifest completed');
+  });
+
+  it('a failed launch that never started is left alone (the slug stays retryable)', async () => {
+    seedManifest({ state: 'failed', stopReason: 'launch failed: x' });
+    expect(await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec(), io: io() })).toBe('already-terminal');
+    expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+  });
+
+  it('still SIGTERMs a running job and writes nothing', async () => {
+    seedManifest({ attempts: [openAttempt] });
+    expect(await stop({ slug: SLUG, deps: makeDeps(), exec: makeExec({ jobState: 'running' }), io: io() })).toBe('signalled');
+    expect(log.filter((l) => l.startsWith('deps:write'))).toEqual([]);
+  });
+});
+
+describe('status with attempts', () => {
+  it('a single attempt prints exactly the old Cost line and no Attempt line', async () => {
+    seedManifest({ attempts: [{ n: 1, startedAt: '2026-10-21T21:00:00.000Z', budgetUsd: 100, costAtStartUsd: 0, costUsd: 42.5 }] });
+    await status({ slug: SLUG, deps: makeDeps(), io: io() });
+    const out = lines.join('\n');
+    expect(out).toContain('Cost:       $42.50 / $100.00 (42.5%)\n');
+    expect(out).not.toContain('Attempt:');
+    expect(out).not.toContain('run total');
+  });
+
+  it('after a resume shows the attempt, its budget, attempt spend over that budget and the cumulative cost beside it', async () => {
+    seedManifest({
+      budgetUsd: 5,
+      costUsd: 44.5,
+      attempts: [
+        { n: 1, startedAt: '2026-10-21T21:00:00.000Z', endedAt: '2026-10-21T21:50:00.000Z', state: 'aborted-budget', budgetUsd: 40, costAtStartUsd: 0, costUsd: 40.5 },
+        { n: 2, startedAt: '2026-10-21T22:00:00.000Z', budgetUsd: 5, costAtStartUsd: 40.5, costUsd: 4 },
+      ],
+    });
+    await status({ slug: SLUG, deps: makeDeps(), io: io() });
+    const out = lines.join('\n');
+    expect(out).toMatch(/^Attempt:    2 \(budget \$5\.00\)$/m);
+    expect(out).toContain('Cost:       $4.00 / $5.00 (80.0%)  run total $44.50');
+  });
+
+  it('falls back to the spend since the attempt began when no attempt cost is recorded yet', async () => {
+    seedManifest({
+      budgetUsd: 10,
+      costUsd: 45,
+      attempts: [
+        { n: 1, startedAt: '2026-10-21T21:00:00.000Z', endedAt: '2026-10-21T21:50:00.000Z', state: 'stopped', budgetUsd: 40, costAtStartUsd: 0, costUsd: 40 },
+        { n: 2, startedAt: '2026-10-21T22:00:00.000Z', budgetUsd: 10, costAtStartUsd: 40 },
+      ],
+    });
+    await status({ slug: SLUG, deps: makeDeps(), io: io() });
+    expect(lines.join('\n')).toContain('Cost:       $5.00 / $10.00 (50.0%)  run total $45.00');
+  });
+
+  it('the listing keeps one line for a single attempt and adds the attempt for several', async () => {
+    seedManifest();
+    const p = runPaths(SLUG, { home, workspaceRoot });
+    mkdirSync(p.runDir, { recursive: true });
+    writeFileSync(p.runJson, '{}');
+    await status({ deps: makeDeps(), io: io() });
+    expect(lines).toEqual([`${SLUG}  running  build  $42.50/$100.00 (43%)`]);
+    lines.length = 0;
+    seedManifest({
+      budgetUsd: 5,
+      costUsd: 44.5,
+      attempts: [
+        { n: 1, startedAt: '2026-10-21T21:00:00.000Z', endedAt: '2026-10-21T21:50:00.000Z', state: 'stopped', budgetUsd: 40, costAtStartUsd: 0, costUsd: 40.5 },
+        { n: 2, startedAt: '2026-10-21T22:00:00.000Z', budgetUsd: 5, costAtStartUsd: 40.5, costUsd: 4 },
+      ],
+    });
+    await status({ deps: makeDeps(), io: io() });
+    expect(lines).toEqual([`${SLUG}  running  build  $4.00/$5.00 (80%)  attempt 2, run total $44.50`]);
+  });
+});
+
+describe('launch on a slug whose control dir is left over from an earlier run (#9)', () => {
+  it('clears the stop flags (and only those) before the job starts', async () => {
+    const p = runPaths(SLUG, { home, workspaceRoot });
+    mkdirSync(p.controlDir, { recursive: true, mode: 0o700 });
+    writeControlFlags(p.controlDir, { hardStop: true, softStop: true, heartbeatTs: 123 });
+    writeFileSync(join(p.controlDir, 'leftover.txt'), 'x');
+    await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+    expect(readControlFlags(p.controlDir)).toEqual({ hardStop: false, softStop: false, heartbeatTs: 123 });
+    expect(existsSync(join(p.controlDir, 'leftover.txt'))).toBe(true);
+  });
+
+  it('a fresh slug with no control.json gets none written', async () => {
+    const p = runPaths(SLUG, { home, workspaceRoot });
+    await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+    expect(existsSync(join(p.controlDir, 'control.json'))).toBe(false);
+  });
+
+  it('retrying a never-started failed slug launches with clear flags', async () => {
+    seedManifest({ state: 'failed', stopReason: 'launch failed: x' });
+    const p = runPaths(SLUG, { home, workspaceRoot });
+    mkdirSync(p.controlDir, { recursive: true, mode: 0o700 });
+    writeControlFlags(p.controlDir, { hardStop: true });
+    await launch({ slug: SLUG, budgetUsd: 50, deps: makeDeps(), exec: makeExec(), fs, io: io(), parentEnv: {} });
+    expect(readControlFlags(p.controlDir).hardStop).toBe(false);
+    expect(manifests.get(SLUG)!.state).toBe('launching');
+  });
+
+  it('a failing reset releases the lock and writes no manifest', async () => {
+    const deps = makeDeps({ resetStopFlags: () => { throw new Error('flags boom'); } });
+    await expect(launch({ slug: SLUG, budgetUsd: 50, deps, exec: makeExec(), fs, io: io(), parentEnv: {} })).rejects.toThrow('flags boom');
+    expect(manifests.size).toBe(0);
+    expect(log).toContain('deps:release');
+  });
+});
+
+describe('resume --budget through commander', () => {
+  const parse = async (args: string[]): Promise<void> => {
+    const program = buildProgram({ deps: makeDeps(), exec: makeExec(), fs, io: io() });
+    await program.parseAsync(['resume', ...args], { from: 'user' });
+  };
+
+  it.each([
+    ['zero', ['x-run', '--budget', '0']],
+    ['negative', ['x-run', '--budget', '-3']],
+    ['NaN', ['x-run', '--budget', 'abc']],
+    ['Infinity', ['x-run', '--budget', 'Infinity']],
+    ['empty', ['x-run', '--budget', '']],
+  ])('refuses a %s budget before reading or writing anything', async (_n, args) => {
+    seedManifest({ state: 'stopped' });
+    await expect(parse(args)).rejects.toThrow(/--budget must be a positive number/);
+    expect(log).toEqual([]);
+  });
+
+  it('requires --budget (there is no default)', async () => {
+    seedManifest({ state: 'stopped' });
+    await expect(parse([SLUG])).rejects.toThrow(/--budget/);
+    expect(log).toEqual([]);
+  });
+
+  it('is listed in the help with the budget flag', () => {
+    const help = buildProgram({ deps: makeDeps() }).commands.find((c) => c.name() === 'resume')!.helpInformation();
+    expect(help).toMatch(/--budget <usd>/);
+    expect(help).toMatch(/required/);
+  });
+
+  it('refuses a missing run with a clear message', async () => {
+    await expect(parse(['nope-run', '--budget', '5'])).rejects.toThrow(/No run found for "nope-run"/);
   });
 });

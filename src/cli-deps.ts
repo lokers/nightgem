@@ -95,6 +95,12 @@ export interface CliDeps {
    * before RUN.json is written. Exactly one writer per launch.
    */
   writeRunContext(controlDir: string, snap: RunContextSnapshot): Promise<void> | void;
+  /**
+   * Read the frozen run context back from `<controlDir>/run-context.json` (validated). `resume` reuses it, so a continued run
+   * keeps the rules it was planned with. Rejects when the file is missing or invalid.
+   * Optional only so that test fakes which never resume need not define it; `realCliDeps` always does, and `resume` refuses without it.
+   */
+  readRunContext?(controlDir: string): Promise<RunContextSnapshot>;
   /** The renderers `nightgem render` composes (tests fake them). The real ones: `realRenderers` from `src/render.ts`. */
   renderers: RenderRenderers;
 
@@ -103,6 +109,13 @@ export interface CliDeps {
   writeManifest(slug: string, manifest: RunManifest): Promise<void>;
   /** Control flags (heartbeat) from the control dir a run recorded in its manifest (never rebuilt from the slug). */
   readControlFlags(controlDir: string): Promise<ControlFlags | undefined>;
+
+  /**
+   * Clear `softStop` and `hardStop` in `<controlDir>/control.json`, leaving the heartbeat alone (a missing or unreadable file
+   * becomes the defaults). `launch` of a reused slug and `resume` call it before the job starts: the orchestrator fails the
+   * attempt when a stop flag of an earlier process is still set. Optional like `readRunContext`: `resume` refuses without it.
+   */
+  resetStopFlags?(controlDir: string): Promise<void> | void;
 
   /** Take the single-run lock (A5). Throws if held. */
   acquireLock(slug: string): Promise<LockHandle>;
