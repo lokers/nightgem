@@ -733,10 +733,21 @@ export interface ShellProbe {
   name: string;
   command: string;
   /**
-   * `fail`: a non-zero exit is the pass. `startsWith`: exit 0 and the output starts with this text. `everyLineStartsWith`: exit 0,
-   * at least one output line, and EVERY non-empty line starts with this text.
+   * `fail`: a non-zero exit is the pass. `succeed`: exit 0 (the output is never read). `startsWith`: exit 0 and the output starts
+   * with this text. `everyLineStartsWith`: exit 0, at least one output line, and EVERY non-empty line starts with this text.
    */
-  expect: 'fail' | { startsWith: string } | { everyLineStartsWith: string };
+  expect: 'fail' | 'succeed' | { startsWith: string } | { everyLineStartsWith: string };
+  /**
+   * A silent pass/fail question about the environment (which shell runs, where TMPDIR points). The result is recorded
+   * (`preflight.canary` log) but a `false` never fails the canary.
+   */
+  diagnostic?: boolean;
+  /**
+   * TEMPORARY (T1 -> T2, #7): a probe that must succeed but fails under today's code (docs/opencode-notes.md, "Temp files and
+   * heredocs inside runs"). While set, a failure is recorded (`expectedFail`) and does not fail the launch. Task T2 fixes the
+   * environment and removes this flag; the probe then guards the fix.
+   */
+  expectedFailUntilT2?: boolean;
 }
 
 export interface ProbeResult {
@@ -745,6 +756,10 @@ export interface ProbeResult {
   exit: number | undefined;
   status?: string;
   skipped?: string;
+  /** The probe is a diagnostic: `ok` is information, not a gate. */
+  diagnostic?: true;
+  /** `expectedFailUntilT2` probe that failed: recorded, not a launch failure. */
+  expectedFail?: true;
 }
 
 export interface ShellProbeInput {
@@ -758,6 +773,11 @@ export interface ShellProbeInput {
   /** A credential file under a sandbox read-deny path (never opened by the run). */
   readDenyFile: string | undefined;
   nonce: string;
+  /**
+   * The run's `$TMPDIR` (the server's temp dir, the one writable temp location). Without it the temp-file probes are skipped
+   * (reported in `skipped`).
+   */
+  tmpDir?: string;
 }
 
 /**
@@ -769,6 +789,42 @@ export const SSH_BLOCKED_PROBE =
   `out=$(ssh -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com 2>&1); ` +
   `if printf '%s' "$out" | grep -qiE 'operation not permitted|connection (refused|timed out)|network is unreachable|could not resolve|no route to host'; ` +
   `then exit 7; else exit 0; fi`;
+
+/**
+ * Probes that must SUCCEED: the shell has to be able to make temp files, because agents write heredocs and call `mktemp` all the
+ * time (#7). They print nothing: pass/fail is the exit code. `/shell` runs `/bin/zsh` (an agent's bash tool too, per the recorded
+ * fixtures), and zsh writes its heredoc temp files to `$TMPPREFIX` (default `/tmp/zsh`, ignoring `TMPDIR`), while BSD `mktemp`
+ * with no template uses the per-user `confstr` dir (`/var/folders/xx/.../T`), also ignoring `TMPDIR`. Both are outside the
+ * sandbox write boundary, so the heredoc and bare `mktemp` probes fail today (`expectedFailUntilT2`); a `mktemp` with an explicit
+ * `$TMPDIR` template is the one that works. See docs/opencode-notes.md, "Temp files and heredocs inside runs".
+ */
+export function tmpFileProbes(tmpDir: string, nonce: string): ShellProbe[] {
+  const q = shq(tmpDir);
+  const heredocFile = `${q}/${TMP_PREFIX}heredoc-probe-${nonce}`;
+  return [
+    {
+      name: 'heredoc into a file in the run tmp dir',
+      // a quoted delimiter: no expansion; the here-document itself needs a shell temp file, the redirect target is writable
+      command: [`f=${heredocFile}`, `cat <<'EOF' > "$f"`, 'canary', 'EOF', '[ "$(cat "$f" 2>/dev/null)" = canary ]; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
+      expect: 'succeed',
+      expectedFailUntilT2: true,
+    },
+    {
+      name: 'mktemp (no template) and a write to it',
+      command: ['f=$(mktemp) || exit 1', 'echo canary > "$f"; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
+      expect: 'succeed',
+      expectedFailUntilT2: true,
+    },
+    {
+      name: 'mktemp with a $TMPDIR template and a write to it',
+      command: ['f=$(mktemp "$TMPDIR/' + TMP_PREFIX + 'mktemp-probe-' + nonce + '.XXXXXX") || exit 1', 'echo canary > "$f"; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
+      expect: 'succeed',
+    },
+    { name: 'diagnostic: the shell is zsh ($ZSH_VERSION is set)', command: '[ -n "$ZSH_VERSION" ]', expect: 'succeed', diagnostic: true },
+    { name: 'diagnostic: $TMPDIR is the run tmp dir', command: `[ "$TMPDIR" = ${q} ]`, expect: 'succeed', diagnostic: true },
+    { name: 'diagnostic: $TMPPREFIX (zsh) is under the run tmp dir', command: `case "\${TMPPREFIX-}" in ${q}/*) exit 0;; *) exit 1;; esac`, expect: 'succeed', diagnostic: true },
+  ];
+}
 
 export function buildShellProbes(i: ShellProbeInput): { probes: ShellProbe[]; skipped: ProbeResult[] } {
   const q = shq(i.repoDir);
@@ -786,6 +842,8 @@ export function buildShellProbes(i: ShellProbeInput): { probes: ShellProbe[]; sk
     { name: 'gh auth status', command: 'gh auth status', expect: 'fail' },
   ];
   const skipped: ProbeResult[] = [];
+  if (i.tmpDir === undefined) skipped.push({ name: 'temp files in the run tmp dir', ok: true, exit: undefined, skipped: 'no run tmp dir known' });
+  else probes.push(...tmpFileProbes(i.tmpDir, i.nonce));
   if (!i.sandbox) {
     skipped.push({ name: 'write /tmp', ok: true, exit: undefined, skipped: 'sandbox disabled' });
     skipped.push({ name: 'ssh to github.com (port 22)', ok: true, exit: undefined, skipped: 'sandbox disabled' });
@@ -820,20 +878,33 @@ export async function runShellCanary(
       const r = await shell(sessionId, p.command, opts.timeoutMs === undefined ? {} : { timeoutMs: opts.timeoutMs });
       const exitedNormally = r.status === 'exited' && r.exit !== undefined;
       let ok = false;
-      if (!exitedNormally) failures.push(`canary: "${p.name}" did not finish normally (status ${r.status})`);
+      let problem: string | undefined;
+      if (!exitedNormally) problem = `canary: "${p.name}" did not finish normally (status ${r.status})`;
       else if (p.expect === 'fail') {
         ok = r.exit !== 0;
-        if (!ok) failures.push(`canary: "${p.name}" ran successfully (exit 0, expected it to be blocked)`);
+        if (!ok) problem = `canary: "${p.name}" ran successfully (exit 0, expected it to be blocked)`;
+      } else if (p.expect === 'succeed') {
+        ok = r.exit === 0;
+        if (!ok) problem = `canary: "${p.name}" failed (exit ${r.exit}, expected it to work)`;
       } else if ('everyLineStartsWith' in p.expect) {
         const want = p.expect.everyLineStartsWith;
         const lines = r.output.split('\n').map((l) => l.trim()).filter(Boolean);
         ok = r.exit === 0 && lines.length > 0 && lines.every((l) => l.startsWith(want));
-        if (!ok) failures.push(`canary: "${p.name}" did not give the expected result (exit ${r.exit})`);
+        if (!ok) problem = `canary: "${p.name}" did not give the expected result (exit ${r.exit})`;
       } else {
         ok = r.exit === 0 && r.output.startsWith(p.expect.startsWith);
-        if (!ok) failures.push(`canary: "${p.name}" did not give the expected result (exit ${r.exit})`);
+        if (!ok) problem = `canary: "${p.name}" did not give the expected result (exit ${r.exit})`;
       }
-      results.push({ name: p.name, ok, exit: r.exit, status: r.status });
+      const tolerated = p.diagnostic === true || p.expectedFailUntilT2 === true;
+      if (problem !== undefined && !tolerated) failures.push(problem);
+      results.push({
+        name: p.name,
+        ok,
+        exit: r.exit,
+        status: r.status,
+        ...(p.diagnostic ? { diagnostic: true as const } : {}),
+        ...(p.expectedFailUntilT2 && !ok ? { expectedFail: true as const } : {}),
+      });
     } catch (err) {
       failures.push(`canary: "${p.name}" errored: ${isRunApiError(err) ? `HTTP ${err.status ?? err.kind}` : errMsg(err)}`);
       results.push({ name: p.name, ok: false, exit: undefined });
@@ -1168,7 +1239,7 @@ async function runShellLayer(
     const plan = await planRemotes(ctx.manifest.repos.map((r) => r.path), git);
     if (plan.issues.length > 0) return plan.issues.map((i) => `canary: ${describeRemoteIssue(i)}`);
     const specRemotes = plan.remotes.filter((r) => r.names.length > 0).map((r) => ({ repo: r.repo, remotes: r.names }));
-    const { probes, skipped } = buildShellProbes({ repoDir, port: where.port, sandbox, specRemotes, readDenyFile: readDeny?.file, nonce });
+    const { probes, skipped } = buildShellProbes({ repoDir, port: where.port, sandbox, specRemotes, readDenyFile: readDeny?.file, nonce, tmpDir: where.tmpDir });
     const session = await ctx.api.createSession({ model: { providerID: 'anthropic', id: 'claude-haiku-5-5' }, agent: 'fixer', title: 'preflight canary shell' });
     const r = await runShellCanary(ctx.api, session.id, probes, opts.shellTimeoutMs === undefined ? {} : { timeoutMs: opts.shellTimeoutMs });
     log('preflight.canary', { layer: 'shell', ok: r.ok, results: [...r.results, ...skipped] });

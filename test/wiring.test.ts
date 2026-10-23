@@ -893,7 +893,12 @@ interface CanaryScript {
   /** /shell: replace the whole result */
   shellOverride?: (command: string) => ShellResult | Error | undefined;
   noShell?: boolean;
+  /** /shell: substrings of must-succeed (temp file and diagnostic) commands that exit 1 instead of 0 */
+  shellFails?: string[];
 }
+
+/** Commands of the must-succeed `/shell` probes (temp files, diagnostics): the fake lets them pass unless a script says otherwise. */
+const MUST_SUCCEED_MARKERS = ['heredoc-probe', 'mktemp', 'ZSH_VERSION', '"$TMPDIR" =', 'TMPPREFIX'];
 
 interface FakeCanary {
   api: ServerApi;
@@ -986,6 +991,7 @@ function fakeCanaryApi(script: CanaryScript): FakeCanary {
       if (o instanceof Error) throw o;
       if (o) return o;
       if (script.shellRuns?.some((x) => command.includes(x))) return { status: 'exited', exit: 0, output: SECRET };
+      if (MUST_SUCCEED_MARKERS.some((m) => command.includes(m))) return { status: 'exited', exit: script.shellFails?.some((x) => command.includes(x)) ? 1 : 0, output: '' };
       if (command.includes('remote get-url --push')) return { status: 'exited', exit: 0, output: 'nopush://github.com/example/nightgem-canary.git\n' };
       return { status: 'exited', exit: 1, output: SECRET };
     };
@@ -1093,7 +1099,17 @@ const probeInput = {
   specRemotes: [] as Array<{ repo: string; remotes: string[] }>,
   readDenyFile: '/h/.aws/config',
   nonce: 'abcd1234',
+  tmpDir: '/c/tmp/nightgem-run',
 };
+
+const TMP_PROBE_NAMES = [
+  'heredoc into a file in the run tmp dir',
+  'mktemp (no template) and a write to it',
+  'mktemp with a $TMPDIR template and a write to it',
+  'diagnostic: the shell is zsh ($ZSH_VERSION is set)',
+  'diagnostic: $TMPDIR is the run tmp dir',
+  'diagnostic: $TMPPREFIX (zsh) is under the run tmp dir',
+];
 
 describe('buildShellProbes', () => {
   it('covers push (github-form origin + rewrite), gh, /tmp write, run-port connect and a sandbox read-deny path', () => {
@@ -1104,6 +1120,7 @@ describe('buildShellProbes', () => {
       'git push url rewritten to nopush://',
       'gh pr list',
       'gh auth status',
+      ...TMP_PROBE_NAMES,
       'write /tmp',
       'ssh to github.com (port 22)',
       'connect to the run port',
@@ -1115,6 +1132,61 @@ describe('buildShellProbes', () => {
     expect(byName['ssh to github.com (port 22)']).toContain('ssh -o BatchMode=yes -o ConnectTimeout=5 -T git@github.com');
     expect(byName['connect to the run port']).toContain('http://127.0.0.1:4242/');
     expect(byName['read a sandbox-denied credential path']).toBe("cat '/h/.aws/config'");
+  });
+
+  it('adds heredoc and mktemp probes that must succeed, plus silent shell/TMPDIR diagnostics, none printing anything', () => {
+    const { probes } = buildShellProbes(probeInput);
+    const byName = Object.fromEntries(probes.map((p) => [p.name, p]));
+    const heredoc = byName['heredoc into a file in the run tmp dir']!;
+    expect(heredoc.command).toBe(
+      ["f='/c/tmp/nightgem-run'/nightgem-heredoc-probe-abcd1234", `cat <<'EOF' > "$f"`, 'canary', 'EOF', '[ "$(cat "$f" 2>/dev/null)" = canary ]; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'),
+    );
+    expect(byName['mktemp (no template) and a write to it']!.command).toBe(['f=$(mktemp) || exit 1', 'echo canary > "$f"; rc=$?', 'rm -f "$f"', 'exit $rc'].join('\n'));
+    expect(byName['mktemp with a $TMPDIR template and a write to it']!.command).toContain('mktemp "$TMPDIR/nightgem-mktemp-probe-abcd1234.XXXXXX"');
+    expect(byName['diagnostic: the shell is zsh ($ZSH_VERSION is set)']!.command).toBe('[ -n "$ZSH_VERSION" ]');
+    expect(byName['diagnostic: $TMPDIR is the run tmp dir']!.command).toBe(`[ "$TMPDIR" = '/c/tmp/nightgem-run' ]`);
+    expect(byName['diagnostic: $TMPPREFIX (zsh) is under the run tmp dir']!.command).toContain(`'/c/tmp/nightgem-run'/*`);
+    for (const n of TMP_PROBE_NAMES) expect(byName[n]!.expect, n).toBe('succeed');
+    // only the two probes that fail under today's code carry the temporary flag (T2 removes it); the diagnostics never gate
+    expect(probes.filter((p) => p.expectedFailUntilT2).map((p) => p.name)).toEqual(TMP_PROBE_NAMES.slice(0, 2));
+    expect(probes.filter((p) => p.diagnostic).map((p) => p.name)).toEqual(TMP_PROBE_NAMES.slice(3));
+    // no probe echoes or prints variables or paths
+    for (const n of TMP_PROBE_NAMES) expect(byName[n]!.command, n).not.toMatch(/\b(echo|printf|env|printenv)\s+["$]?[A-Z]|\bset\b|\benv\b/);
+  });
+
+  it('quotes an awkward run tmp dir', () => {
+    const { probes } = buildShellProbes({ ...probeInput, tmpDir: "/c/t m'p" });
+    expect(probes.find((p) => p.name.startsWith('diagnostic: $TMPDIR'))?.command).toBe(`[ "$TMPDIR" = '/c/t m'\\''p' ]`);
+  });
+
+  it('skips the temp-file probes (without failing) when the run tmp dir is unknown', () => {
+    const { tmpDir: _unused, ...noTmp } = probeInput;
+    const { probes, skipped } = buildShellProbes(noTmp);
+    expect(probes.map((p) => p.name).filter((n) => TMP_PROBE_NAMES.includes(n))).toEqual([]);
+    expect(skipped.map((x) => `${x.name}: ${x.skipped}`)).toEqual(['temp files in the run tmp dir: no run tmp dir known']);
+  });
+
+  // the commands themselves are shell code: run them for real (no sandbox) with a zsh like the agent's
+  it.skipIf(!existsSync('/bin/zsh'))('the temp-file probes pass in a real /bin/zsh when TMPDIR and TMPPREFIX point at a writable run tmp dir', () => {
+    const run = join(home, 'run-tmp');
+    mkdirSync(run, { recursive: true });
+    const { probes } = buildShellProbes({ ...probeInput, tmpDir: run });
+    for (const p of probes.filter((x) => TMP_PROBE_NAMES.includes(x.name))) {
+      const r = spawnSync('/bin/zsh', ['-c', p.command], { env: { PATH: '/usr/bin:/bin', HOME: home, TMPDIR: run, TMPPREFIX: join(run, 'zsh') }, encoding: 'utf8', timeout: 20_000 });
+      expect({ name: p.name, status: r.status, out: r.stdout + r.stderr }).toEqual({ name: p.name, status: 0, out: '' });
+    }
+    expect(readdirSync(run)).toEqual([]);
+  });
+
+  it.skipIf(!existsSync('/bin/zsh'))('the TMPDIR and TMPPREFIX diagnostics report false for a shell that points elsewhere, and print nothing', () => {
+    const run = join(home, 'run-tmp');
+    mkdirSync(run, { recursive: true });
+    const { probes } = buildShellProbes({ ...probeInput, tmpDir: run });
+    const status = (name: string, env: Record<string, string>): number | null =>
+      spawnSync('/bin/zsh', ['-c', probes.find((p) => p.name === name)!.command], { env: { PATH: '/usr/bin:/bin', HOME: home, ...env }, encoding: 'utf8' }).status;
+    expect(status(TMP_PROBE_NAMES[4]!, { TMPDIR: '/var/folders/xx/T' })).toBe(1);
+    expect(status(TMP_PROBE_NAMES[5]!, { TMPDIR: run, TMPPREFIX: '/tmp/zsh' })).toBe(1);
+    expect(status(TMP_PROBE_NAMES[5]!, { TMPDIR: run })).toBe(1);
   });
 
   it('checks every push URL of every remote of every spec repo is nopush://, shell-quoting awkward paths', () => {
@@ -1243,6 +1315,65 @@ describe('runShellCanary', () => {
     const r = await runShellCanary(f.api, 's', probes);
     expect(r.failures).toEqual(['canary: "gh auth status" errored: HTTP 404']);
     expect(f.shellCommands).toHaveLength(probes.length);
+  });
+
+  describe('must-succeed temp-file probes', () => {
+    const heredoc = TMP_PROBE_NAMES[0]!;
+    const bareMktemp = TMP_PROBE_NAMES[1]!;
+    const templated = TMP_PROBE_NAMES[2]!;
+
+    it('pass: recorded as ok, no flags beyond the diagnostic marker, nothing printed', async () => {
+      const r = await runShellCanary(fakeCanaryApi({}).api, 's', probes);
+      expect(r.ok).toBe(true);
+      for (const n of TMP_PROBE_NAMES) expect(r.results.find((x) => x.name === n), n).toMatchObject({ ok: true, exit: 0 });
+      expect(r.results.filter((x) => x.expectedFail)).toEqual([]);
+      expect(r.results.filter((x) => x.diagnostic).map((x) => x.name)).toEqual(TMP_PROBE_NAMES.slice(3));
+    });
+
+    it('an expectedFailUntilT2 probe that fails is recorded (expectedFail) and does NOT fail the launch', async () => {
+      const f = fakeCanaryApi({ shellFails: ['heredoc-probe', 'f=$(mktemp) ||'] });
+      const r = await runShellCanary(f.api, 's', probes);
+      expect(r.ok).toBe(true);
+      expect(r.failures).toEqual([]);
+      expect(r.results.find((x) => x.name === heredoc)).toMatchObject({ ok: false, exit: 1, expectedFail: true });
+      expect(r.results.find((x) => x.name === bareMktemp)).toMatchObject({ ok: false, exit: 1, expectedFail: true });
+      expect(r.results.find((x) => x.name === templated)).toMatchObject({ ok: true });
+      expect(JSON.stringify(r)).not.toContain(SECRET);
+    });
+
+    it('a probe that times out is tolerated while it carries the flag', async () => {
+      const f = fakeCanaryApi({ shellOverride: (c) => (c.includes('heredoc-probe') ? { status: 'timeout', exit: undefined, output: '' } : undefined) });
+      const r = await runShellCanary(f.api, 's', probes);
+      expect(r.failures).toEqual([]);
+      expect(r.results.find((x) => x.name === heredoc)).toMatchObject({ ok: false, expectedFail: true });
+    });
+
+    it('once T2 removes the flag, the same failure is fatal and names the probe and exit code only', async () => {
+      const unflagged = probes.map(({ expectedFailUntilT2: _flag, ...p }) => p);
+      const r = await runShellCanary(fakeCanaryApi({ shellFails: ['heredoc-probe', 'f=$(mktemp) ||'] }).api, 's', unflagged);
+      expect(r.ok).toBe(false);
+      expect(r.failures).toEqual([`canary: "${heredoc}" failed (exit 1, expected it to work)`, `canary: "${bareMktemp}" failed (exit 1, expected it to work)`]);
+      expect(r.results.find((x) => x.name === heredoc)).toMatchObject({ ok: false });
+      expect(r.results.find((x) => x.name === heredoc)?.expectedFail).toBeUndefined();
+    });
+
+    it('a must-succeed probe without the flag is fatal when it fails (mktemp with a $TMPDIR template)', async () => {
+      const r = await runShellCanary(fakeCanaryApi({ shellFails: ['mktemp "$TMPDIR/'] }).api, 's', probes);
+      expect(r.failures).toEqual([`canary: "${templated}" failed (exit 1, expected it to work)`]);
+    });
+
+    it('a failing diagnostic is recorded as ok:false but never gates', async () => {
+      const r = await runShellCanary(fakeCanaryApi({ shellFails: ['ZSH_VERSION', '"$TMPDIR" =', 'TMPPREFIX'] }).api, 's', probes);
+      expect(r.ok).toBe(true);
+      expect(r.failures).toEqual([]);
+      for (const n of TMP_PROBE_NAMES.slice(3)) expect(r.results.find((x) => x.name === n), n).toMatchObject({ ok: false, exit: 1, diagnostic: true });
+    });
+
+    it('an API error on a flagged probe is still fatal (the flag excuses a failing command, not a broken client)', async () => {
+      const f = fakeCanaryApi({ shellOverride: (c) => (c.includes('heredoc-probe') ? new RunApiError({ kind: 'http', message: 'boom', method: 'POST', path: '/x', status: 500 }) : undefined) });
+      const r = await runShellCanary(f.api, 's', probes);
+      expect(r.failures).toEqual([`canary: "${heredoc}" errored: HTTP 500`]);
+    });
   });
 
   it('a client without shell() fails loudly', async () => {
@@ -1431,6 +1562,18 @@ describe('runPreflight', () => {
     expect(canaryFailures(res)).toEqual([]);
     expect(fake.prompts).toEqual([]);
     expect(fake.shellCommands.length).toBeGreaterThan(0);
+  });
+
+  it("the temp-file probes run against the run tmp dir; today's failures are logged as expectedFail and do not fail the launch", async () => {
+    const fake = fakeCanaryApi({ ...good(), shellFails: ['heredoc-probe', 'f=$(mktemp) ||', 'ZSH_VERSION'] });
+    const logs: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const res = await preflightIn(ctxFor(fake, writeRun()), {}, { log: (event, fields) => logs.push({ event, fields }) });
+    expect(canaryFailures(res)).toEqual([]);
+    expect(fake.shellCommands.some((c) => c.includes(`'${runTmpDir(SLUG)}'/nightgem-heredoc-probe-`))).toBe(true);
+    const shellLog = logs.find((l) => l.event === 'preflight.canary' && l.fields.layer === 'shell');
+    const results = shellLog?.fields.results as Array<{ name: string; ok: boolean; expectedFail?: boolean; diagnostic?: boolean }>;
+    expect(results.filter((r) => r.expectedFail).map((r) => r.name)).toEqual(['heredoc into a file in the run tmp dir', 'mktemp (no template) and a write to it']);
+    expect(results.find((r) => r.name.startsWith('diagnostic: the shell is zsh'))).toMatchObject({ ok: false, diagnostic: true });
   });
 
   it('without a sandbox the kernel-level probes are not run (they would legitimately succeed)', async () => {
