@@ -284,6 +284,7 @@ export function buildProgram(opts: ProgramOptions): Command {
         else if (c.action === 'skipped-edited') err(`warning: ${c.path} was edited since install; leaving it in place`);
         else err(`warning: ${c.path} is not managed by ${APP}; leaving it in place`);
       }
+      out(`To remove the PATH link too (if you ran npm link): npm unlink -g ${APP}`);
     });
 
   program
