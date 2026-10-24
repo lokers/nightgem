@@ -420,6 +420,18 @@ describe('environment checks (explicit home / env / fs)', () => {
       expect(readPluginSpecs(text)).toEqual(['oh-my-opencode-slim@3.0.4']);
       expect(JSON.stringify(detectSlim({ home, fs: nodeFs }))).not.toContain('SECRET-KEY');
     });
+
+    it('also reads the OpenCode 2.x `plugins` key, with string, tuple and { package } entries', () => {
+      const text = '{ "plugins": ["oh-my-opencode-slim@3.0.4", ["other-plugin@1.0.0", {}], { "package": "/abs/plugin-dir" }] }';
+      expect(readPluginSpecs(text)).toEqual(['oh-my-opencode-slim@3.0.4', 'other-plugin@1.0.0', '/abs/plugin-dir']);
+      writeOpencodeJson({ plugins: ['oh-my-opencode-slim@3.0.4'] });
+      cachePkg(slimDir('oh-my-opencode-slim@3.0.4'), '3.0.4');
+      expect(detectSlim({ home, fs: nodeFs })).toMatchObject({ status: 'ok', version: '3.0.4' });
+    });
+
+    it('reads both keys when a config has both', () => {
+      expect(readPluginSpecs('{ "plugin": ["a@1.0.0"], "plugins": ["oh-my-opencode-slim@3.0.4"] }')).toEqual(['a@1.0.0', 'oh-my-opencode-slim@3.0.4']);
+    });
   });
 
   describe('required skills', () => {

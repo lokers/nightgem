@@ -335,10 +335,19 @@ export interface SlimStatus {
 export function readPluginSpecs(text: string): string[] {
   try {
     const tree = parseTree(text, [], { allowTrailingComma: true, disallowComments: false });
-    const node = tree ? findNodeAtLocation(tree, ['plugin']) : undefined;
-    const value: unknown = node ? getNodeValue(node) : undefined;
-    if (!Array.isArray(value)) return typeof value === 'string' ? [value] : [];
-    return value.map((v) => (Array.isArray(v) ? v[0] : v)).filter((v): v is string => typeof v === 'string');
+    if (!tree) return [];
+    // OpenCode 1.x configs use `plugin`; 2.x configs (and tools that rewrite them) use `plugins`. Read both.
+    const specs: string[] = [];
+    for (const key of ['plugin', 'plugins']) {
+      const node = findNodeAtLocation(tree, [key]);
+      const value: unknown = node ? getNodeValue(node) : undefined;
+      const items: unknown[] = Array.isArray(value) ? value : value === undefined ? [] : [value];
+      for (const v of items) {
+        const spec = Array.isArray(v) ? v[0] : v !== null && typeof v === 'object' ? (v as { package?: unknown }).package : v;
+        if (typeof spec === 'string') specs.push(spec);
+      }
+    }
+    return specs;
   } catch {
     return [];
   }
@@ -389,7 +398,7 @@ export function detectSlim(input: { home: string; fs: EnvironmentFs }): SlimStat
   const { home, fs } = input;
   const dir = join(home, '.config', 'opencode');
   const file = ['opencode.json', 'opencode.jsonc'].map((f) => join(dir, f)).find((f) => fs.existsSync(f));
-  // no global config means no "plugin" list, so slim cannot be enabled: a hard failure, not "cannot tell"
+  // no global config means no "plugin"/"plugins" list, so slim cannot be enabled: a hard failure, not "cannot tell"
   if (!file) return { status: 'absent', detail: `no global opencode.json at ${join(dir, 'opencode.json')}, so ${SLIM_PACKAGE} is not enabled (install it: see the README prerequisites)` };
   let text: string;
   try {
@@ -398,7 +407,7 @@ export function detectSlim(input: { home: string; fs: EnvironmentFs }): SlimStat
     return { status: 'unknown', detail: `cannot read ${file}` };
   }
   const entry = readPluginSpecs(text).find((p) => p === SLIM_PACKAGE || p.startsWith(`${SLIM_PACKAGE}@`));
-  if (entry === undefined) return { status: 'absent', detail: `${SLIM_PACKAGE} is not in the "plugin" list of ${file} (install it: see the README prerequisites)` };
+  if (entry === undefined) return { status: 'absent', detail: `${SLIM_PACKAGE} is not in the "plugin" or "plugins" list of ${file} (install it: see the README prerequisites)` };
   const specVersion = entry.includes('@') ? entry.slice(entry.indexOf('@') + 1) : undefined;
   const cached = cachedSlimVersion(home, specVersion, fs);
   if (cached === undefined) {
