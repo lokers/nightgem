@@ -5,30 +5,52 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
+Runs stop fighting the sandbox, a smoother first run, and resumable runs.
+
+### Upgrading from 0.1.0
+
+- Update between runs, not during one: `git pull && npm ci` in the clone. A clone runs `src/` directly, so a stale `dist/` is never used.
+- Re-run `install` (`node <checkout>/bin/nightgem.mjs install`, or `nightgem install` after `npm link`) to refresh the slash commands. Commands you edited are left alone unless you pass `--force` (a `.bak` copy is kept).
+- Optional: run `npm link` in the clone to put `nightgem` on your PATH. Until then `doctor` shows a `cli on PATH` warning; the slash commands work either way.
+- `doctor` (and so `launch`) now fails hard when oh-my-opencode-slim is configured but not in OpenCode's cache, pinned or not. Start OpenCode once so it downloads the plugin.
+- `launch <slug>` no longer overwrites an existing run. Use `nightgem resume <slug> --budget <usd>` or a new slug. Only a launch that failed before the run started can be retried; a run that failed at preflight counts as started.
+- Runs from 0.1.0 keep working. A `RUN.json` without `attempts` reads as one attempt, and a stopped, over-budget, failed or stalled 0.1.0 run can be resumed if its worktrees still exist. `RUN.json` stays at schema version 2. After a resume, `budgetUsd` is the current attempt's budget and `attempts` holds the history.
+- Every run now checks before the first phase that heredocs and `mktemp` work in the run shell. If not, it ends `failed` (`preflight-failed`) before doing any work. See [Troubleshooting](docs/troubleshooting.md#preflight-canary-failures).
+
 ### Security
 
 - nightgem's own git calls (tripwires, report, remote reads, the startup fetch) no longer run programs planted in a repo's `.git/config`, `.git/info/attributes` or hooks (`core.fsmonitor`, filters, textconv, `diff.external`, pager, `uploadpack`, credential helpers, ...): one hardened runner passes fixed and per-driver `-c` overrides and a trusted environment (#7)
 
 ### Added
 
-- `nightgem resume <slug> --budget <usd>` continues a stopped, over-budget, failed or stalled run as a new attempt from the first unfinished phase, re-opening the tasks a wind-down parked and reusing the worktrees and the frozen run context. `stop` on a run whose job is gone (a crash) now closes its attempt, so `crash` → `stop` → `resume` works (#9)
+- `nightgem resume <slug> --budget <usd>` continues a `stopped`, `aborted-budget`, `failed` or `stalled` run as a new attempt. `--budget` is required and is that attempt's own budget, on top of what was already spent. It starts at the first unfinished phase, re-opens tasks a wind-down parked, and reuses the worktrees (it refuses if one is missing) and the frozen run context. A resume that fails to start is rolled back and recorded as a `resume-failed` attempt (#9)
+- `stop` on a run whose job is gone (a crash) now closes its open attempt (`stopped-after-crash`), so crash → `stop` → `resume` works. It also closes an attempt left open on a run that already ended (#9)
+- `/nightgem-status` suggests `resume` for a resumable run and `stop` first after a crash (re-run `install` to update the command) (#9)
 - `npm link` puts `nightgem` on your PATH from a clone (the bins resolve `src/` and `dist/` through the symlink), `uninstall` prints the `npm unlink -g nightgem` hint, and the docs use `nightgem <command>` (#8)
 - `doctor` warns when `nightgem` is missing from the PATH or points at another checkout (`cli on PATH`), and `doctor --verbose` prints the full detail of every check (#8)
 
 ### Changed
 
-- The budget applies per attempt: the 85% and 100% stops compare the attempt's own spend with its budget. `status` and the report show the attempts, the attempt's budget use and the cumulative cost, and link the earlier reviews (#9)
-- Heredocs and a bare `mktemp` now work inside a run: `TMPPREFIX` points into the run tmp dir (zsh heredocs) and a read-only `mktemp` shim is first on `PATH`. The sandbox write allowance is unchanged: bash and `sh` heredocs still need a writable working directory (the run dir or a worktree). The run tmp dir is wiped when the server starts, and the canary now fails the launch if any of this stops working or if `/private/var/tmp` becomes writable (#7)
-- `doctor` fails (hard) when oh-my-opencode-slim is configured but not yet in OpenCode's cache, and tells you to start OpenCode once (#8)
+- The budget applies per attempt: the 85% and 100% stops compare the current attempt's spend with its own budget. A run that is never resumed behaves as before. `status` shows the current attempt, its budget use and the run total. `REPORT.md` adds an Attempts table and the cumulative cost, and links the earlier final reviews (#9)
+- Heredocs and a bare `mktemp` now work inside a run: `TMPPREFIX` points into the run tmp dir (zsh heredocs) and a read-only `mktemp` shim is first on `PATH`. The sandbox write allowance is unchanged: bash and `sh` heredocs still need a writable working directory (the run dir or a worktree). The run tmp dir is wiped when the server starts, and the preflight canary now fails the run (`preflight-failed`) if any of this stops working or if `/private/var/tmp` becomes writable (#7)
+- `doctor` fails (hard) when oh-my-opencode-slim is configured but not yet in OpenCode's cache, pinned or not (0.1.0 accepted a pinned version and only warned otherwise), and tells you to start OpenCode once (#8)
 - `doctor` and the `launch` warnings print at most 200 characters per line, with long details summarised (#8)
-- `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried (#9)
+- `launch` refuses a slug that already has a run instead of overwriting it; a launch that failed before it started can be retried. A run that failed at preflight counts as started: fix the cause, then `resume` it or use a new slug (#9)
 
 ### Fixed
 
-- `resume` keeps the run's own spec repos; it no longer treats every other checkout in the workspace as a spec repo (and fetches it) (#9)
 - `doctor` finds oh-my-opencode-slim in an OpenCode 2.x `plugins` list too, not only in the older `plugin` key
 - The guard no longer blocks plain path arguments and directory-like `NAME=value` assignments that merely end in a denied command name, such as `ls docs/gh` or `export TMPDIR=…/T/opencode`. It still refuses anything that could run them, and `GHBIN=/usr/bin/gh` (not a directory-like name) (#7)
 - The guard refuses a shell command that contains non-ASCII whitespace (such as a no-break space) or a control character right away, with a clear reason, and the tokenizer can no longer loop on it (#7)
+
+### Known limitations
+
+- Some harmless commands that only mention a denied tool are still refused: quoted arguments, heredocs next to such a path, and heredoc bodies in the permission profile (#10).
+- The guard checks each command on its own: a variable set in one command and run as `$VAR` later is not caught (the profile, sandbox and scrubbed credentials still apply).
+- bash and `sh` heredocs need a writable working directory.
+- Tested only against OpenCode 2.0.29 and oh-my-opencode-slim 3.x; macOS only.
 
 ## [0.1.0] - 2026-10-23
 
@@ -62,4 +84,6 @@ First public release. Experimental: macOS only, run from a clone (not published 
 - Attaching OpenCode.app to a running job to watch it live is untested.
 - Shell heredocs fail inside the sandbox (they cannot create their temp file), so agents fall back to the file-write tool.
 
+[Unreleased]: https://github.com/lokers/nightgem/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/lokers/nightgem/releases/tag/v0.2.0
 [0.1.0]: https://github.com/lokers/nightgem/releases/tag/v0.1.0

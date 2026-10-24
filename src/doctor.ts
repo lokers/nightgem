@@ -331,7 +331,7 @@ export interface SlimStatus {
   detail: string;
 }
 
-/** Entries of the `plugin` key (a string, or `[name, options]`). Only that key is read: the file also holds provider keys. */
+/** Entries of the `plugin` and `plugins` keys (each a string, or `[name, options]`). Only those keys are read: the file also holds provider keys. */
 export function readPluginSpecs(text: string): string[] {
   try {
     const tree = parseTree(text, [], { allowTrailingComma: true, disallowComments: false });

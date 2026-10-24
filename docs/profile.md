@@ -79,7 +79,7 @@ Skills are detected at launch by `src/skills.ts`, as plain folders `<root>/<name
 1. `~/.config/opencode/skills`
 2. `~/.agents/skills`
 3. `~/.claude/skills`
-4. the `skills` key of your global `opencode.json` (only the `skills` and `plugin` keys are read; `~` is expanded)
+4. the `skills` key of your global `opencode.json` (only the `skills`, `plugin` and `plugins` keys are read; `~` is expanded)
 5. the profile's `skills.extraRoots`
 
 Every path is realpath'd, so a symlinked skill is counted once. The first root wins and collisions are reported. Project-level skill directories are **not** scanned: sessions run with cwd `<run>`, so OpenCode would not discover them either.

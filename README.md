@@ -18,7 +18,7 @@ In the morning you find verified **local** branches and a `REPORT.md`. Nothing i
 nightgem needs [OpenCode](https://opencode.ai) with [oh-my-opencode-slim](https://github.com/alvinunreal/oh-my-opencode-slim) 3.x, and macOS.
 
 > [!WARNING]
-> **Experimental (0.1.0).** It runs an AI agent unattended on your machine. Read the [disclaimer](#disclaimer) and the [safety model](docs/safety-model.md) first.
+> **Experimental (0.2.0).** It runs an AI agent unattended on your machine. Read the [disclaimer](#disclaimer) and the [safety model](docs/safety-model.md) first.
 
 ## 5-minute quickstart
 
@@ -115,7 +115,7 @@ Each phase is its own root session, so cost is exact per phase. Failure policy: 
 | Soft stop, **85%** | Nothing new is dispatched. In-flight work winds down, a short oracle-only review runs, then the report is written. |
 | Hard stop, **100%** | Every session is aborted, then the report is written (`aborted-budget`). |
 
-Cost is OpenCode's own per-session figure, summed over the run's sessions; no provider billing API is used. It is an **estimate**, and overshoot at the hard stop is bounded, not zero. See [docs/how-it-works.md](docs/how-it-works.md#budget-accounting).
+Cost is OpenCode's own per-session figure, summed over the run's sessions; no provider billing API is used. It is an **estimate**, and overshoot at the hard stop is bounded, not zero. See [docs/how-it-works.md](docs/how-it-works.md#budget-accounting). Each `resume` brings its own `--budget`, so a resumed run's total can go past the first budget.
 
 ## Safety at a glance
 
@@ -166,12 +166,12 @@ The complete field reference, skill detection and tracker behaviour are in **[do
 
 | Command | What it does |
 |---|---|
-| `launch <slug> --budget <usd> [--repos a,b]` | Checks the spec is `APPROVED`, runs `doctor`, snapshots the run context and starts the detached launchd job. |
+| `launch <slug> --budget <usd> [--repos a,b]` | Checks the spec is `APPROVED`, runs `doctor`, snapshots the run context and starts the detached launchd job. Refuses a slug that already has a run (use `resume` or a new slug). |
 | `status [slug]` | State, phase, cost against the attempt's budget, heartbeat, paths. Without a slug it lists every run. |
 | `resume <slug> --budget <usd>` | Continues a stopped, over-budget, failed or stalled run as a new attempt, with `--budget` as extra money for it. After a crash run `stop <slug>` first. See [Resume](docs/how-it-works.md#resume). |
 | `stop <slug>` | Aborts all sessions and writes the report. A run whose job is gone (a crash) is closed, so it can be resumed. |
 | `report <slug>` | Regenerates `REPORT.md` from the artifacts and git. No LLM, no network. |
-| `doctor [--audit-repo [--dir <repo>]]` | Environment checks for an unattended run. `--audit-repo` scans tracked files for personal data instead. |
+| `doctor [--verbose] [--audit-repo [--dir <repo>]]` | Environment checks for an unattended run. Each check prints one line of at most 200 characters; `--verbose` prints the full detail. `--audit-repo` scans tracked files for personal data instead. |
 | `profile path\|show [--json]\|validate` | Locate, print or validate the profile. |
 | `render <slug> --out <dir>` | Render the run's generated config, sandbox profile and prompts for inspection, without launching. |
 | `install [--workspace <dir>] [--force]` / `uninstall` | Install or remove the slash commands (and the starter profile). |

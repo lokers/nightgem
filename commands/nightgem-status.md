@@ -15,8 +15,11 @@ Report the status of the nightgem run: $ARGUMENTS
    run total.
    If the state is `stopped`, `aborted-budget`, `failed` or `stalled`, tell me it can continue
    as a new attempt with `{{NODE}} {{BIN}} resume <slug> --budget <usd>` (the budget is extra money for
-   that attempt; never run it yourself). If the state still looks active but the heartbeat is
-   old and the job is gone (a crash), tell me to run `{{NODE}} {{BIN}} stop <slug>` first, then resume.
+   that attempt; never run it yourself), except a `failed` run with `Server: not started` and
+   `Sessions: 0`: suggest launching it again. If the state is still active (`launching`,
+   `running`, `winding-down`, `stopping`) but the heartbeat is marked STALE, the orchestrator may
+   have crashed: tell me to run `{{NODE}} {{BIN}} stop <slug>` (it signals a live job, or closes a
+   crashed run), then resume.
    A `completed` run cannot be resumed.
 3. If `REPORT.md` exists at the report path the CLI printed, read it and summarise the
    headline (outcome, tasks done and blocked, cost) and the "Needs human attention" section

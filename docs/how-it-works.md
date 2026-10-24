@@ -65,7 +65,7 @@ nightgem resume <slug> --budget <usd>
 
 **When you can resume.** The run must be `stopped`, `aborted-budget`, `failed` or `stalled`. A `completed` run is never resumed (launch a new slug), and an active run is refused until it ends.
 
-**After a crash.** If the orchestrator died without finishing (the job is gone but `RUN.json` still says `running`), its last attempt is still open and `resume` refuses it. Run `nightgem stop <slug>` first: with the job not running, `stop` closes the attempt as `stopped` (reason `stopped-after-crash`), releases a dead lock and writes the report. Then `resume`.
+**After a crash.** If the orchestrator died without finishing (the job is gone but `RUN.json` still says an active state: `launching`, `running`, `winding-down` or `stopping`), its last attempt is still open and `resume` refuses it. Run `nightgem stop <slug>` first: with the job not running, `stop` closes the attempt as `stopped` (reason `stopped-after-crash`), releases a dead lock and writes the report. Then `resume`.
 
 **What it does.**
 
@@ -79,7 +79,7 @@ nightgem resume <slug> --budget <usd>
 
 `resume` also refuses a live launchd job or a lock held by a live process. If it fails after writing the new attempt, it rolls back: the previous terminal state is restored and the new attempt stays in the history, closed as `failed` with the stop reason `resume-failed`. That attempt never ran, so the next `resume` ignores it when choosing where to continue (and numbers its attempt after it). See [Troubleshooting](troubleshooting.md#resume-refusals).
 
-**`launch` and an existing slug.** `launch` never overwrites a run: if `<slug>` already has a `RUN.json` it refuses, and tells you to `resume` it (when it is resumable) or use a new slug. The one exception is a launch that failed before the run ever started (state `failed`, no start time, no sessions, no attempt): it holds no history, so the same slug can be launched again.
+**`launch` and an existing slug.** `launch` never overwrites a run: if `<slug>` already has a `RUN.json` it refuses, and tells you to `resume` it (when it is resumable) or use a new slug. The one exception is a launch that failed before the run ever started (state `failed`, no start time, no sessions, no attempt): it holds no history, so the same slug can be launched again. A run that failed at preflight (`preflight-failed`, for example when the heredoc/`mktemp` canary fails) counts as started: fix the cause, then `resume` it or use a new slug.
 
 **In the report.** After a resume the Run section says "Resumed (n attempts)" and has an Attempts table. The cost section shows the cumulative total, and the budget percentage is the last attempt's spend over its own budget. `status` shows the same, for the last attempt that actually ran (a `resume-failed` attempt is not counted). The report's Attempts table still lists a failed resume with its stop reason.
 

@@ -37,14 +37,17 @@ Before the first phase the orchestrator runs the rule check and a three-layer ca
 |---|---|
 | canary `(guard)` | The guard's `decide()` gave a different verdict than the probe table expects. Treat as a guard regression (`test/guard.test.ts` should fail too); do not launch around it. |
 | canary `"<probe>" ran successfully` | A forbidden operation worked through `/shell` (a sandbox or env hole) or in the LLM canary. Fix the layer; never skip the canary to launch. |
+| canary `"<probe>" failed (exit n, expected it to work)` | A probe that must succeed did not: "heredoc into a file in the run tmp dir", "heredoc through /bin/bash -c", "heredoc through /bin/sh -c" or one of the `mktemp` probes. The run shell cannot make temp files. Check `TMPDIR` / `TMPPREFIX` and the `mktemp` shim, see [opencode-notes.md](opencode-notes.md). The bash and `sh` heredoc probes also need a writable working directory. |
 | canary `setup failed` / `did not finish normally` | The canary itself could not run. Check `orchestrator.log` for the `preflight.canary` lines and that `git` works. A hang proves nothing, so this is a failure, not a pass. |
 | `canary-inconclusive` (defect, not a failure) | The small model declined to try the probes twice. The deterministic layers already passed, so the run proceeded. Safe to ignore unless it recurs on every launch. |
+
+Fix the cause, then `resume <slug> --budget <usd>` or use a new slug; `launch` refuses the slug because the run started.
 
 `NIGHTGEM_SKIP_LLM_CANARY=1` skips layer 3 only. `NIGHTGEM_SKIP_CANARY=1` skips all three and `NIGHTGEM_SANDBOX=0` skips the kernel-level probes; both exist for tests only. Do not use them for a real run.
 
 ## Resume refusals
 
-`resume <slug> --budget <usd>` checks everything before it writes anything, so a refusal changes nothing. When a run has just ended, `resume` also waits up to about 5 s for the previous orchestrator's delayed launchd cleanup before it starts the job. See [Resume](how-it-works.md#resume).
+`resume <slug> --budget <usd>` checks everything before it writes anything, so a refusal changes nothing, except that a stale loaded-but-not-running launchd job may be booted out. When a run has just ended, `resume` also waits up to about 5 s for the previous orchestrator's delayed launchd cleanup before it starts the job. See [Resume](how-it-works.md#resume).
 
 | Message | Fix |
 |---|---|
@@ -71,7 +74,7 @@ A resumed run that ends at once as `failed` with the stop reason `attempt-invari
 
 ## Stale lock
 
-The lock records a PID. If the PID is gone, the next `launch` or `doctor` treats the lock as stale and takes it over. If a run is stuck in `launching` or `running` with a dead job, check `launchctl print gui/$(id -u)/<label>` (the label is in `RUN.json`), run `stop <slug>` to mark it `stopped` (this also closes its attempt, so the run can be resumed), then `report <slug>`.
+The lock records a PID. If the PID is gone, the next `launch` or `doctor` treats the lock as stale and takes it over. If a run is stuck in `launching` or `running` with a dead job, check `launchctl print gui/$(id -u)/<label>` (the label is in `RUN.json`), run `stop <slug>` to mark it `stopped` (this also closes its attempt, so the run can be resumed, and writes the report).
 
 ## A stalled run
 
