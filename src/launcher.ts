@@ -553,9 +553,12 @@ export async function resume(input: ResumeInput): Promise<ResumeResult> {
 
     // 4. the shared gates, on the frozen context. We hold the lock ourselves, so the doctor's "lock is free" check is moot.
     const run = eligible.manifest;
+    // RUN.json also records every other checkout in the workspace (for the tripwires) with defaultBranch '-'.
+    // Only the run's spec repos are passed on, or every workspace repo would become a spec repo on resume.
+    const specRepos = run.repos.filter((r) => r.defaultBranch !== '-');
     const gates = await runLaunchGates({
       slug,
-      repos: run.repos.length > 0 ? run.repos.map((r) => r.path) : undefined,
+      repos: specRepos.length > 0 ? specRepos.map((r) => r.path) : undefined,
       deps: { ...deps, lockIsFree: async () => true },
       exec,
       fs: input.fs,

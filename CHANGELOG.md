@@ -25,6 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Fixed
 
+- `resume` keeps the run's own spec repos; it no longer treats every other checkout in the workspace as a spec repo (and fetches it) (#9)
 - `doctor` finds oh-my-opencode-slim in an OpenCode 2.x `plugins` list too, not only in the older `plugin` key
 - The guard no longer blocks plain path arguments and directory-like `NAME=value` assignments that merely end in a denied command name, such as `ls docs/gh` or `export TMPDIR=…/T/opencode`. It still refuses anything that could run them, and `GHBIN=/usr/bin/gh` (not a directory-like name) (#7)
 - The guard refuses a shell command that contains non-ASCII whitespace (such as a no-break space) or a control character right away, with a clear reason, and the tokenizer can no longer loop on it (#7)

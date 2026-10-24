@@ -869,6 +869,26 @@ describe('resume', () => {
       await go({ deps });
       expect(baselined).toEqual([repoPath()]);
     });
+
+    it('passes only the spec repos on, not the tripwire-only workspace checkouts recorded with defaultBranch "-"', async () => {
+      const other = join(workspaceRoot, 'acme-web');
+      mkdirSync(join(other, '.git'), { recursive: true });
+      seed({
+        repos: [
+          { name: 'acme-api', path: repoPath(), defaultBranch: 'main', baseline: { head: 'old', branch: 'main', porcelainHash: 'old', stashCount: 0 } },
+          { name: 'acme-web', path: other, defaultBranch: '-', baseline: { head: 'x', branch: 'main', porcelainHash: 'x', stashCount: 0 } },
+        ],
+      });
+      let baselined: string[] = [];
+      const deps = rdeps({
+        buildBaseline: async (paths) => {
+          baselined = paths;
+          return [{ name: 'acme-api', path: paths[0]!, defaultBranch: 'main', baseline: { head: 'new', branch: 'main', porcelainHash: 'new', stashCount: 0 } }];
+        },
+      });
+      await go({ deps });
+      expect(baselined).toEqual([repoPath()]);
+    });
   });
 
   describe('a failure after the manifest write rolls back', () => {
