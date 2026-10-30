@@ -544,6 +544,17 @@ describe('review rounds and fail-closed reviews (#11)', () => {
     }
   });
 
+  it('every re-check written to FINAL_REVIEW.md starts with a VERDICT line, NONE when it did not run', () => {
+    const out = render('phase-review');
+    expect(out).toMatch(/## Re-check round <n>`;[\s\S]{0,40}starts with a\s+`VERDICT: APPROVE \| APPROVE-WITH-FIXES \| REJECT` line/);
+    expect(out).toMatch(/If the re-check did not run, you write that line yourself as\s+`VERDICT: NONE`/);
+    const oracle = render('oracle_append');
+    expect(oracle).toMatch(/\*\*Re-check\.\*\*[\s\S]{0,200}`VERDICT: APPROVE \| APPROVE-WITH-FIXES \| REJECT` line/);
+    expect(oracle).toMatch(/open findings only/);
+    expect(oracle).not.toContain('the one fix-up round');
+    expect(oracle).toMatch(/must-fix for the fix rounds/);
+  });
+
   it('a final review that did not run is saved as VERDICT: NONE', () => {
     for (const name of ['phase-review', 'phase-review-lite'] as const) {
       expect(render(name), name).toContain('VERDICT: NONE');

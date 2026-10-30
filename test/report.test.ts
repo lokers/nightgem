@@ -564,8 +564,24 @@ describe('finalReviewVerdict', () => {
     expect(finalReviewVerdict('Verdict: REVISE')).toEqual({ ok: false, reason: 'unrecognised', verdict: 'REVISE' });
   });
 
-  it('uses the first verdict line, so a later re-check cannot hide a REJECT', () => {
-    expect(finalReviewVerdict('VERDICT: REJECT\n\n## Re-check round 1\nVERDICT: APPROVE')).toEqual({ ok: false, reason: 'reject' });
+  it('uses the worst verdict of all VERDICT lines, so neither the first nor the last can hide a problem', () => {
+    expect(finalReviewVerdict('VERDICT: REJECT\n\n## Re-check round 1\nVERDICT: APPROVE')).toEqual({ ok: false, reason: 'reject', verdicts: ['REJECT', 'APPROVE'] });
+    expect(finalReviewVerdict('VERDICT: APPROVE-WITH-FIXES\n\n## Re-check round 1\nVERDICT: REJECT')).toEqual({
+      ok: false,
+      reason: 'reject',
+      verdicts: ['APPROVE-WITH-FIXES', 'REJECT'],
+    });
+    expect(finalReviewVerdict('VERDICT: APPROVE-WITH-FIXES\n## Re-check round 1\nVERDICT: NONE')).toEqual({
+      ok: false,
+      reason: 'none',
+      verdicts: ['APPROVE-WITH-FIXES', 'NONE'],
+    });
+    expect(finalReviewVerdict('VERDICT: REJECT\n## Re-check round 1\nVERDICT: NONE\n## Re-check round 2\nVERDICT: APPROVE')).toMatchObject({ ok: false, reason: 'reject' });
+    expect(finalReviewVerdict('VERDICT: APPROVE\n## Re-check round 1\nVerdict: REVISE')).toEqual({ ok: false, reason: 'unrecognised', verdict: 'REVISE', verdicts: ['APPROVE', 'REVISE'] });
+  });
+
+  it('is fine when every verdict line approves', () => {
+    expect(finalReviewVerdict('VERDICT: APPROVE-WITH-FIXES\n## Re-check round 1\nVERDICT: APPROVE')).toEqual({ ok: true });
   });
 });
 
@@ -602,6 +618,34 @@ describe('buildReport: final review check', () => {
   it('flags VERDICT: NONE as a review that did not run', async () => {
     const attention = attentionOf(await withReview('VERDICT: NONE\nThe oracle returned no verdict.\n'));
     expect(attention).toContain('says `VERDICT: NONE`: the oracle review did not run');
+  });
+
+  it('names the first and the last verdict when a re-check changed the picture', async () => {
+    const soft = attentionOf(await withReview('VERDICT: REJECT\n\n## Re-check round 1\nVERDICT: APPROVE\n'));
+    expect(soft).toContain('initial REJECT, round 1 re-check APPROVE: check the fixes');
+    const hard = attentionOf(await withReview('VERDICT: APPROVE-WITH-FIXES\n\n## Re-check round 1\nVERDICT: APPROVE\n\n## Re-check round 2\nVERDICT: REJECT\n'));
+    expect(hard).toContain('initial APPROVE-WITH-FIXES, round 2 re-check REJECT');
+    expect(hard).toContain('not approved');
+    const none = attentionOf(await withReview('VERDICT: APPROVE-WITH-FIXES\n\n## Re-check round 1\nVERDICT: NONE\n'));
+    expect(none).toContain('initial APPROVE-WITH-FIXES, round 1 re-check NONE');
+    expect(none).toContain('did not run');
+  });
+
+  it('flags the review only for a run that has ended, not for a report written mid-run', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'completed'), d, { recursive: true });
+    await rm(join(d, 'FINAL_REVIEW.md'));
+    const run = JSON.parse(await readFile(join(d, 'RUN.json'), 'utf8')) as Record<string, unknown>;
+    for (const state of ['launching', 'running', 'winding-down', 'stopping']) {
+      await writeFile(join(d, 'RUN.json'), JSON.stringify({ ...run, state }));
+      const md = await buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) });
+      expect(attentionOf(md), state).not.toContain('### Final review');
+    }
+    for (const state of ['completed', 'failed', 'stalled', 'aborted-budget', 'stopped']) {
+      await writeFile(join(d, 'RUN.json'), JSON.stringify({ ...run, state }));
+      const md = await buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) });
+      expect(attentionOf(md), state).toContain('### Final review');
+    }
   });
 
   it('flags VERDICT: REJECT', async () => {

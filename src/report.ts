@@ -17,6 +17,7 @@ import {
   RunManifest,
   TaskEvent,
   attemptsOf,
+  isTerminalRunState,
   parseRunManifest,
   type CostLine as CostLineT,
   type Decision as DecisionT,
@@ -552,41 +553,62 @@ function verifyByHandSection(ctx: Ctx): string[] {
 /** What `finalReviewVerdict` found. Everything but `ok: true` is listed under "Needs human attention". */
 export type FinalReviewCheck =
   | { ok: true }
-  | { ok: false; reason: 'missing' | 'no-verdict' | 'none' | 'reject' }
-  | { ok: false; reason: 'unrecognised'; verdict: string };
+  | { ok: false; reason: 'missing' | 'no-verdict' | 'none' | 'reject'; verdicts?: string[] }
+  | { ok: false; reason: 'unrecognised'; verdict: string; verdicts?: string[] };
 
 const VERDICT_LINE_RE = /^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*?)[\s*_`]*$/i;
+const VERDICT_TOKEN_RE = /^[A-Za-z]+(?:-[A-Za-z]+)*(?![\w|-])/;
+
+type VerdictKind = 'ok' | 'reject' | 'none' | 'unrecognised';
+/** How bad a verdict is when several are in one file (higher wins). */
+const SEVERITY: Record<VerdictKind, number> = { ok: 0, unrecognised: 1, none: 2, reject: 3 };
+
+function classifyVerdict(value: string): { kind: VerdictKind; label: string } {
+  const token = value.includes('|') ? undefined : VERDICT_TOKEN_RE.exec(value)?.[0];
+  if (token === undefined) return { kind: 'unrecognised', label: value };
+  const up = token.toUpperCase();
+  if (up === 'APPROVE' || up === 'APPROVE-WITH-FIXES') return { kind: 'ok', label: up };
+  if (up === 'NONE') return { kind: 'none', label: up };
+  if (up === 'REJECT') return { kind: 'reject', label: up };
+  return { kind: 'unrecognised', label: token };
+}
 
 /**
- * Read the verdict of a final review: the first `VERDICT:` (or `Verdict:`) line with a value, markdown decoration
- * tolerated. Only APPROVE and APPROVE-WITH-FIXES are fine. A missing file, no verdict line, `NONE` (the review did not
- * run) and `REJECT` are flagged, and so is anything else, including the unfilled `APPROVE | ... | REJECT` template.
- * Later lines (a re-check appended after a fix round) never override the first, so a REJECT cannot be hidden.
+ * Read the verdicts of a final review: every `VERDICT:` (or `Verdict:`) line with a value, markdown decoration
+ * tolerated. The review is fine only if there is at least one and all of them are APPROVE or APPROVE-WITH-FIXES. The
+ * WORST one decides (REJECT, then NONE, then anything unrecognised, including the unfilled `APPROVE | ... | REJECT`
+ * template), so neither the first nor the last verdict (an initial review and the re-checks appended after the fix
+ * rounds) can hide a problem. A missing file or no verdict line is flagged too. With several verdict lines the result
+ * carries them all, in file order, as `verdicts`.
  */
 export function finalReviewVerdict(text: string | null): FinalReviewCheck {
   if (text === null) return { ok: false, reason: 'missing' };
+  const found: Array<{ kind: VerdictKind; label: string }> = [];
   for (const line of text.split('\n')) {
     const value = VERDICT_LINE_RE.exec(line)?.[1];
-    if (value === undefined || value === '') continue;
-    const token = /^[A-Za-z]+(?:-[A-Za-z]+)*(?![\w|-])/.exec(value)?.[0];
-    if (value.includes('|') || token === undefined) return { ok: false, reason: 'unrecognised', verdict: value };
-    switch (token.toUpperCase()) {
-      case 'APPROVE':
-      case 'APPROVE-WITH-FIXES':
-        return { ok: true };
-      case 'NONE':
-        return { ok: false, reason: 'none' };
-      case 'REJECT':
-        return { ok: false, reason: 'reject' };
-      default:
-        return { ok: false, reason: 'unrecognised', verdict: token };
-    }
+    if (value !== undefined && value !== '') found.push(classifyVerdict(value));
   }
-  return { ok: false, reason: 'no-verdict' };
+  if (found.length === 0) return { ok: false, reason: 'no-verdict' };
+  const worst = found.reduce((a, b) => (SEVERITY[b.kind] > SEVERITY[a.kind] ? b : a));
+  if (worst.kind === 'ok') return { ok: true };
+  const verdicts = found.length > 1 ? { verdicts: found.map((v) => v.label) } : {};
+  return worst.kind === 'unrecognised'
+    ? { ok: false, reason: 'unrecognised', verdict: worst.label, ...verdicts }
+    : { ok: false, reason: worst.kind, ...verdicts };
 }
 
 function finalReviewMessage(check: Exclude<FinalReviewCheck, { ok: true }>): string {
   const f = `\`${FINAL_REVIEW_FILE}\``;
+  const v = check.verdicts;
+  if (v && v.length > 1) {
+    const first = v[0] as string;
+    const last = v[v.length - 1] as string;
+    const trail = `initial ${first}, round ${v.length - 1} re-check ${last}`;
+    const lastOk = last === 'APPROVE' || last === 'APPROVE-WITH-FIXES';
+    if (lastOk) return `${f}: ${trail}: check the fixes (the worst verdict in the file is ${check.reason === 'unrecognised' ? `"${check.verdict}"` : check.reason.toUpperCase()}).`;
+    const worst = check.reason === 'none' ? 'a review did not run' : check.reason === 'reject' ? 'the review is not approved' : 'a verdict is unrecognised';
+    return `${f}: ${trail}. ${worst[0]?.toUpperCase()}${worst.slice(1)}. ${check.reason === 'none' ? 'The work was not fully reviewed.' : 'Read its findings first.'}`;
+  }
   switch (check.reason) {
     case 'missing':
       return `${f} is missing: no final review was saved, so @oracle did not review this run's work.`;
@@ -609,8 +631,10 @@ function attentionSection(ctx: Ctx): string[] {
   const unverified = ctx.pushChecks.filter((c) => c.state === 'unknown' || c.state === 'no-repo');
   const withHits = ctx.suppressionScans.filter((s) => s.hits !== null && s.hits.length > 0);
   const unscanned = ctx.suppressionScans.filter((s) => s.hits === null);
-  // without a RUN.json nothing is known about what ran, so a missing review is not news
-  const review = ctx.manifest ? finalReviewVerdict(ctx.finalReviewText) : ({ ok: true } as const);
+  // without a RUN.json nothing is known about what ran, and a report written mid-run (`nightgem report`) is too early to
+  // say the review is missing: only a run that has ended is held to it
+  const ended = ctx.manifest !== null && isTerminalRunState(ctx.manifest.state);
+  const review = ended ? finalReviewVerdict(ctx.finalReviewText) : ({ ok: true } as const);
   if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0 && unscanned.length === 0 && review.ok) {
     out.push('Nothing flagged.');
     return out;

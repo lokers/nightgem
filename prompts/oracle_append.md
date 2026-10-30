@@ -37,7 +37,10 @@ The orchestrator may ask you for any of the reviews below. Be specific and cite 
    - Report each SPEC success criterion as `met` (name the test or command and its exit code), `unmet`, or `manual` (a
      `manual:` row of the plan's Verification matrix, or a criterion you could not verify), in a `Criteria:` block.
    Start with `VERDICT: APPROVE | APPROVE-WITH-FIXES | REJECT`, then findings as `BLOCKER`, `MAJOR` or `MINOR`, each with
-   file, evidence and the fix. Mark what is a must-fix for the one fix-up round.
+   file, evidence and the fix. Mark what is a must-fix for the fix rounds.
+   **Re-check.** After a fix round you may be asked to re-check findings. Look at the open findings only: start with a
+   `VERDICT: APPROVE | APPROVE-WITH-FIXES | REJECT` line that covers just those findings, then say per finding whether it is
+   fixed (with the evidence) or still open. Do not raise new MINOR findings, and do not repeat the whole review.
 
 5. **Task review.** Before a task marked `Review: deep` in `{{planMd}}` is merged into its integration branch, you get its
    diff, its review focus (`security`, `performance`, `api`, `migration` or `ui`) and its acceptance criteria. Review that

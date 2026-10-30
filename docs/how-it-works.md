@@ -123,7 +123,7 @@ The full review phase asks @oracle for a final review, then runs up to `review.m
 A review that did not run must not look like one that did:
 
 - If an @oracle review (plan or final) returns no verdict, the orchestrator asks once more. If there is still none, it logs a Decision with `needsHumanAttention: true`, and it never substitutes its own review. A final review without a verdict is saved as `FINAL_REVIEW.md` starting with `VERDICT: NONE`.
-- `REPORT.md` checks this without a model. Under "Needs human attention" it flags a `FINAL_REVIEW.md` that is missing, has no `VERDICT:` line (`Verdict:` is accepted too), says `NONE` or `REJECT`, or carries any other verdict than `APPROVE` or `APPROVE-WITH-FIXES`. The first verdict line counts, so a re-check appended after a fix round does not hide a `REJECT`.
+- `REPORT.md` checks this without a model. Under "Needs human attention" it flags a `FINAL_REVIEW.md` that is missing, has no `VERDICT:` line (`Verdict:` is accepted too), says `NONE` or `REJECT`, or carries any other verdict than `APPROVE` or `APPROVE-WITH-FIXES`. Every `VERDICT:` line in the file counts and the worst one decides, so neither the initial review nor a re-check appended after a fix round (each starts with its own `VERDICT:` line, `NONE` when the re-check did not run) can hide a problem. When they differ the flag names both, for example "initial REJECT, round 2 re-check APPROVE: check the fixes". A report written while the run is still going does not flag a missing review.
 
 ## Verification matrix and checks by hand
 

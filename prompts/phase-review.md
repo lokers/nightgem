@@ -19,9 +19,12 @@ No human is present. Do not ask questions. Decide and log.
    MAJOR findings of the review in step 3 that are fixable.
    - Dispatch the fixes as new tasks (id `review-fix-<n>`, `n` counting up across rounds, TaskEvents with `phase: "review"`).
    - Re-verify on the integration branch (full lint, typecheck, test and build, exit codes recorded).
-   - Ask @oracle to re-check only the open BLOCKER and MAJOR findings: give it the list and the new diff. Append its answer
-     verbatim to `{{specsDir}}/FINAL_REVIEW.md` under `## Re-check round <n>`. No verdict: ask once more, then stop the
-     fix rounds, log a Decision with `needsHumanAttention: true`, and never judge the fixes yourself.
+   - Ask @oracle to re-check only the open BLOCKER and MAJOR findings: give it the list and the new diff, and ask for a
+     `VERDICT:` line first. Append its answer verbatim to `{{specsDir}}/FINAL_REVIEW.md` under `## Re-check round <n>`; that
+     section starts with a `VERDICT: APPROVE | APPROVE-WITH-FIXES | REJECT` line (one of the three). No verdict: ask once
+     more. If the re-check did not run, you write that line yourself as `VERDICT: NONE`, with one line saying why, then stop
+     the fix rounds, log a Decision with `needsHumanAttention: true`, and never judge the fixes yourself. The report reads
+     every `VERDICT:` line in the file and flags the worst one.
    - Update the list. Stop early as soon as no BLOCKER or MAJOR finding is open. A finding that was not fixed in a round is
      retried at most once, in the next round; after that it stays open and is not retried.
    - Do not start a round past {{reviewMaxRounds}}, or when only findings that are not fixable remain. Whatever remains open
