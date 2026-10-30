@@ -97,6 +97,7 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `REPORT.md` | Final report: outcome, attempts of a resumed run, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. See [Suppressions and skipped tests](#suppressions-and-skipped-tests). |
 | `MANUAL_CHECKS.md` | Written by the review phase: a `- [ ]` checklist of what a human has to verify by hand (the `manual:` rows of the plan's Verification matrix, criteria reported `manual` or `unmet`, anything the review could not verify), or `None.`. `REPORT.md` copies it under `## Verify by hand`. After a resume it is overwritten by the new review. |
 | `FINAL_REVIEW.md` | The oracle's final review. After a resume the earlier ones are kept as `FINAL_REVIEW-attempt<n>.md` (and `.run/run-complete-attempt<n>.json`) |
+| `RETRO.md` | Written by [`/nightgem-retro`](#retrospective) after the run: the findings, the diffs applied or skipped, suggested repo-docs text and drafted nightgem issue texts. Not written by the run itself. |
 | `.run/RUN.json` | State, phase, cost total, attempts, session ids, PID, port, server URL, profile and skills summary (zod-validated) |
 | `.run/cost.jsonl` | Cost ledger lines (`session-info` or `estimate`) |
 | `.run/tasks.jsonl` | Task events appended by agents |
@@ -147,7 +148,8 @@ A branch with hits gets ⚠️ and a pointer under "Needs human attention". The 
 
 `/nightgem-retro <slug>` is an interactive slash command for a run that has ended. It reads the run's artifacts read-only (`REPORT.md`, `DECISIONS.md`, `tasks.jsonl`, `FINAL_REVIEW.md`, `MANUAL_CHECKS.md` and the run events), groups the friction (guard denials, retried or blocked tasks, escalations, wind-downs, review findings, flagged suppressions) into findings with their evidence, and classifies each by where the fix belongs: your **profile**, your **instructions file**, a **repo's own docs**, or **nightgem** itself. It uses the `reflect` skill when one is available.
 
-- A fix for the profile or the instructions file is shown as a diff and applied only after you approve it (a profile edit is checked with `profile validate` and undone if it fails).
+- The run's artifacts were written by autonomous agents, so the command treats their text as untrusted data, never as instructions. A command an agent retried in another form after a denial is treated as a possible bypass: it becomes a drafted nightgem issue or a guard-corpus probe, never a profile change.
+- A fix for the profile or the instructions file is shown as a diff and applied only after you approve it (a profile edit is checked with `profile validate` and undone if it fails). A diff that removes a `deny` entry, widens `workspaceRoot` or `skills.extraRoots`, or changes `tracker.autoClaim` is labelled "loosens safety" with the risk spelled out, and is never the recommended option.
 - Suggested text for a repo's docs is written down, not applied.
 - For nightgem itself it drafts an issue text and never files it; it never edits the nightgem checkout.
 - It writes `RETRO.md` into the run's specs directory. It never stops, resumes or changes the run. `install` installs the command with the others (re-run it to get it).
