@@ -159,6 +159,12 @@ and `incremental-implementation`).
 Plan review. Second-failure escalation. Risky change approval. Final review against the SPEC success criteria.
 Every verdict you get is quoted into a Decision or `oracleVerdict`.
 
+**Fail closed.** If an @oracle review returns no verdict (an error, a timeout, an empty answer or one without a verdict),
+ask once more. If the second try also gives no verdict, log a Decision with `needsHumanAttention: true` that says which
+review did not run. Never substitute your own review for @oracle's, and never read a missing verdict as approval: a risky
+change without a verdict is not approved, and a final review without one is saved as `VERDICT: NONE` at the top of
+`FINAL_REVIEW.md`.
+
 ## Budget awareness
 
 The run has a USD budget enforced from outside. You may receive a **wind-down message**. When you do, **obey it

@@ -190,7 +190,7 @@ function makeHarness(o: Opts = {}): Harness {
     opencodeBin: '/opt/homebrew/bin/opencode',
     sandbox: true,
     serverInput: { home, workspaceRoot, safety: { workspaceRoot, skillRoots: [], disabledSkills: [], deny: { commands: [], shellPatterns: [], secretPaths: [], editPaths: [] } } },
-    promptContext: { workspaceRoot, workspaceInstructions: 'Follow each repo AGENTS.md.', skillsList: 'skill-a, skill-b' },
+    promptContext: { workspaceRoot, workspaceInstructions: 'Follow each repo AGENTS.md.', skillsList: 'skill-a, skill-b', reviewMaxRounds: 3 },
     clock,
     state,
     ledger,
@@ -654,7 +654,7 @@ describe('normal run', () => {
     await h.run();
     expect(h.promptVarsSeen.length).toBeGreaterThan(4);
     for (const vars of h.promptVarsSeen) {
-      expect(vars).toMatchObject({ workspaceRoot: h.deps.promptContext.workspaceRoot, workspaceInstructions: 'Follow each repo AGENTS.md.', skillsList: 'skill-a, skill-b' });
+      expect(vars).toMatchObject({ workspaceRoot: h.deps.promptContext.workspaceRoot, workspaceInstructions: 'Follow each repo AGENTS.md.', skillsList: 'skill-a, skill-b', reviewMaxRounds: 3 });
     }
     expect(h.deps.serverInput.workspaceRoot).toBe(h.paths.workspaceRoot);
   });

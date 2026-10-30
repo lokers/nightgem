@@ -5,7 +5,7 @@
  * the existing REPORT.md (only its `## Narrative` section is carried over). It tolerates missing
  * or empty files and never throws on git failures: those render as "unknown" plus a note.
  */
-import { access, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import { ZodError, type z } from 'zod';
@@ -224,6 +224,7 @@ interface Ctx {
   integrations: Map<string, TaskEventT>; // repo name -> latest integration event
   phaseEvents: TaskEventT[]; // every `phase:<name>` marker event, in file order
   finalReviewPath: string | null; // set when <specsDir>/FINAL_REVIEW.md exists
+  finalReviewText: string | null; // its text
   /** `<specsDir>/MANUAL_CHECKS.md` and its text; `text` is null when the file does not exist. */
   manualChecks: { path: string; text: string | null };
   /** Review files renamed with an `-attempt<n>` suffix by a resume, in attempt order. */
@@ -548,6 +549,58 @@ function verifyByHandSection(ctx: Ctx): string[] {
   return out;
 }
 
+/** What `finalReviewVerdict` found. Everything but `ok: true` is listed under "Needs human attention". */
+export type FinalReviewCheck =
+  | { ok: true }
+  | { ok: false; reason: 'missing' | 'no-verdict' | 'none' | 'reject' }
+  | { ok: false; reason: 'unrecognised'; verdict: string };
+
+const VERDICT_LINE_RE = /^[\s>#*_`-]*verdict[\s*_`]*:[\s*_`]*(.*?)[\s*_`]*$/i;
+
+/**
+ * Read the verdict of a final review: the first `VERDICT:` (or `Verdict:`) line with a value, markdown decoration
+ * tolerated. Only APPROVE and APPROVE-WITH-FIXES are fine. A missing file, no verdict line, `NONE` (the review did not
+ * run) and `REJECT` are flagged, and so is anything else, including the unfilled `APPROVE | ... | REJECT` template.
+ * Later lines (a re-check appended after a fix round) never override the first, so a REJECT cannot be hidden.
+ */
+export function finalReviewVerdict(text: string | null): FinalReviewCheck {
+  if (text === null) return { ok: false, reason: 'missing' };
+  for (const line of text.split('\n')) {
+    const value = VERDICT_LINE_RE.exec(line)?.[1];
+    if (value === undefined || value === '') continue;
+    const token = /^[A-Za-z]+(?:-[A-Za-z]+)*(?![\w|-])/.exec(value)?.[0];
+    if (value.includes('|') || token === undefined) return { ok: false, reason: 'unrecognised', verdict: value };
+    switch (token.toUpperCase()) {
+      case 'APPROVE':
+      case 'APPROVE-WITH-FIXES':
+        return { ok: true };
+      case 'NONE':
+        return { ok: false, reason: 'none' };
+      case 'REJECT':
+        return { ok: false, reason: 'reject' };
+      default:
+        return { ok: false, reason: 'unrecognised', verdict: token };
+    }
+  }
+  return { ok: false, reason: 'no-verdict' };
+}
+
+function finalReviewMessage(check: Exclude<FinalReviewCheck, { ok: true }>): string {
+  const f = `\`${FINAL_REVIEW_FILE}\``;
+  switch (check.reason) {
+    case 'missing':
+      return `${f} is missing: no final review was saved, so @oracle did not review this run's work.`;
+    case 'no-verdict':
+      return `${f} has no \`VERDICT:\` line, so there is no verdict to rely on. Read it by hand.`;
+    case 'none':
+      return `${f} says \`VERDICT: NONE\`: the oracle review did not run, so the work was not reviewed.`;
+    case 'reject':
+      return `${f} says \`VERDICT: REJECT\`. Read its findings first.`;
+    case 'unrecognised':
+      return `${f} has an unrecognised verdict "${check.verdict}" (expected APPROVE, APPROVE-WITH-FIXES or REJECT). Read it by hand.`;
+  }
+}
+
 function attentionSection(ctx: Ctx): string[] {
   const out: string[] = ['## Needs human attention', ''];
   const flagged = ctx.decisions.filter((d) => d.needsHumanAttention);
@@ -555,9 +608,14 @@ function attentionSection(ctx: Ctx): string[] {
   const blocked = [...ctx.tasks, ...ctx.integrations.values()].filter((t) => t.state === 'blocked');
   const unverified = ctx.pushChecks.filter((c) => c.state === 'unknown' || c.state === 'no-repo');
   const withHits = ctx.suppressionScans.filter((s) => s.hits !== null && s.hits.length > 0);
-  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0) {
+  // without a RUN.json nothing is known about what ran, so a missing review is not news
+  const review = ctx.manifest ? finalReviewVerdict(ctx.finalReviewText) : ({ ok: true } as const);
+  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0 && review.ok) {
     out.push('Nothing flagged.');
     return out;
+  }
+  if (!review.ok) {
+    out.push('### Final review', '', `- ${finalReviewMessage(review)}`, '');
   }
   if (flagged.length > 0) {
     out.push('### Decisions', '');
@@ -820,10 +878,8 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
   }
   const phaseEvents = tasksRead.items.filter((e) => e.id.startsWith(PHASE_PREFIX));
   const finalReview = join(paths.specsDir, FINAL_REVIEW_FILE);
-  const finalReviewPath = await access(finalReview).then(
-    () => finalReview,
-    () => null,
-  );
+  const finalReviewText = await readText(finalReview);
+  const finalReviewPath = finalReviewText === null ? null : finalReview;
 
   const manualChecksPath = join(paths.specsDir, MANUAL_CHECKS_FILE);
 
@@ -833,6 +889,7 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
     integrations,
     phaseEvents,
     finalReviewPath,
+    finalReviewText,
     manualChecks: { path: manualChecksPath, text: await readText(manualChecksPath) },
     earlierReviews: await readEarlierReviews(paths.specsDir, paths.runDir),
     decisions: latestBy(decisionsRead.items, (d) => d.id),

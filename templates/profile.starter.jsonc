@@ -50,6 +50,10 @@
   // Per-agent model, "provider/model" or "provider/model#variant". NIGHTGEM_<AGENT>_MODEL wins at launch.
   "models": {},
 
+  // Full review phase: how many review -> fix -> re-review rounds the run may take before it leaves the rest to you.
+  // An integer from 1 to 5 (default 2). The short review after a soft stop never fixes anything.
+  // "review": { "maxRounds": 2 },
+
   // Local-only terms that `doctor --audit-repo` flags as leaks, matched case-insensitively. Never committed.
   "audit": {
     "bannedTerms": []

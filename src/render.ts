@@ -139,6 +139,7 @@ export function renderRunArtifacts(input: RenderInput, r: RenderRenderers): Rend
     workspaceRoot: context.workspaceRoot,
     workspaceInstructions: context.instructions.text,
     skillsList: offeredSkillsText(context),
+    reviewMaxRounds: context.profile.data.review.maxRounds,
   };
 
   const files: RenderedFile[] = [

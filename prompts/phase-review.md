@@ -10,11 +10,22 @@ No human is present. Do not ask questions. Decide and log.
 3. Ask @oracle for the final review of all integration branches against the SPEC success criteria. Give it the repo paths,
    branch names, the diffs (`git diff <base>...<branch>`), the verify results, `{{decisionsMd}}` and the Verification matrix
    in `{{planMd}}`. It reports each criterion as met, unmet or manual.
-4. Save the oracle's review verbatim to `{{specsDir}}/FINAL_REVIEW.md`.
-5. **At most one fix-up round.** If the review lists BLOCKER or MAJOR findings that are fixable: dispatch the fixes as new
-   tasks (id `review-fix-<n>`, TaskEvents with `phase: "review"`), re-verify on the integration branch, then ask @oracle
-   to re-check those findings once. Do not start a second round. Whatever remains goes into a Decision with
-   `needsHumanAttention: true`.
+   **Fail closed.** If @oracle returns no verdict (an error, a timeout, an empty answer or one without a verdict), ask once
+   more. If the second try also gives no verdict, log a Decision of kind `other` with `needsHumanAttention: true` that says
+   the final review did not run. Never substitute your own review for @oracle's, and never read a missing verdict as approval.
+4. Save the oracle's review verbatim to `{{specsDir}}/FINAL_REVIEW.md`. If there was no verdict after the retry, write
+   `VERDICT: NONE` as its first line, then one line saying why, skip step 5 and carry on from step 6.
+5. **Fix rounds: at most {{reviewMaxRounds}} fix rounds.** A round is: fix, re-verify, re-check. Start from the BLOCKER and
+   MAJOR findings of the review in step 3 that are fixable.
+   - Dispatch the fixes as new tasks (id `review-fix-<n>`, `n` counting up across rounds, TaskEvents with `phase: "review"`).
+   - Re-verify on the integration branch (full lint, typecheck, test and build, exit codes recorded).
+   - Ask @oracle to re-check only the open BLOCKER and MAJOR findings: give it the list and the new diff. Append its answer
+     verbatim to `{{specsDir}}/FINAL_REVIEW.md` under `## Re-check round <n>`. No verdict: ask once more, then stop the
+     fix rounds, log a Decision with `needsHumanAttention: true`, and never judge the fixes yourself.
+   - Update the list. Stop early as soon as no BLOCKER or MAJOR finding is open. A finding that was not fixed in a round is
+     retried at most once, in the next round; after that it stays open and is not retried.
+   - Do not start a round past {{reviewMaxRounds}}, or when only findings that are not fixable remain. Whatever remains open
+     goes into a Decision with `needsHumanAttention: true`.
 6. Append a `Decision` of kind `other` with the final verdict. Mirror it to `{{decisionsMd}}`.
 7. Write `{{specsDir}}/MANUAL_CHECKS.md`, overwriting any older one: a `- [ ]` checklist for the human, one item per line with
    the exact steps. Include every `manual:` row of the Verification matrix in `{{planMd}}`, every success criterion the final

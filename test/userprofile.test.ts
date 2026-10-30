@@ -49,8 +49,19 @@ describe('UserProfile schema', () => {
       skills: { required: [], exclude: [], extraRoots: [] },
       deny: { commands: [], shellPatterns: [], secretPaths: [], editPaths: [] },
       models: {},
+      review: { maxRounds: 2 },
       audit: { bannedTerms: [] },
     });
+  });
+
+  it('review.maxRounds is an integer from 1 to 5 and defaults to 2', () => {
+    const parse = (review: unknown) => UserProfile.safeParse({ version: 1, workspaceRoot: '/w', review });
+    expect(UserProfile.parse({ version: 1, workspaceRoot: '/w' }).review.maxRounds).toBe(2);
+    expect(UserProfile.parse({ version: 1, workspaceRoot: '/w', review: {} }).review).toEqual({ maxRounds: 2 });
+    for (const n of [1, 2, 3, 4, 5]) expect(parse({ maxRounds: n }).data?.review.maxRounds, String(n)).toBe(n);
+    for (const bad of [0, 6, -1, 2.5, '3', null, Number.NaN, Infinity]) expect(parse({ maxRounds: bad }).success, String(bad)).toBe(false);
+    expect(parse({ maxRounds: 2, rounds: 3 }).success).toBe(false);
+    expect(parse(3).success).toBe(false);
   });
 
   it('parses a full profile', () => {

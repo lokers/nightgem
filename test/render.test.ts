@@ -102,6 +102,15 @@ describe('renderRunArtifacts (pure, injected renderers)', () => {
     ]);
   });
 
+  it('hands the profile\'s review round count to every prompt', () => {
+    const input = baseInput();
+    const files = renderRunArtifacts(input, fakeRenderers());
+    expect(files.find((f) => f.path === 'prompts/phase-plan.md')?.content).toContain('reviewMaxRounds=2');
+    const context = { ...input.context, profile: { ...input.context.profile, data: { ...input.context.profile.data, review: { maxRounds: 4 } } } };
+    const files4 = renderRunArtifacts({ ...input, context }, fakeRenderers());
+    expect(files4.find((f) => f.path === 'prompts/phase-plan.md')?.content).toContain('reviewMaxRounds=4');
+  });
+
   it('never lets the password or other secrets into any rendered file', () => {
     const files = renderRunArtifacts(baseInput(), fakeRenderers());
     for (const f of files) expect(f.content, f.path).not.toContain(PASSWORD);

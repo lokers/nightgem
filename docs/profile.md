@@ -37,6 +37,7 @@ The profile is the only source of user-specific facts. It is JSONC, validated wi
     "editPaths": ["**/api-spec.yaml", "**/generated/**"]
   },
   "models": { "fixer": "provider/medium-model#high", "explorer": "provider/small-model" },
+  "review": { "maxRounds": 2 },
   "audit": { "bannedTerms": [] }
 }
 ```
@@ -62,6 +63,7 @@ The profile is the only source of user-specific facts. It is JSONC, validated wi
 | `deny.secretPaths` | no | Extra secret locations, **relative to `$HOME`** (`.config/acme-cli`). Read-denied by the sandbox and refused by the guard. |
 | `deny.editPaths` | no | Edit-deny globs (generated clients, API specs). The built-in default is empty. |
 | `models.<agent>` | no | `provider/model` or `provider/model#variant` for `orchestrator`, `fixer`, `designer`, `explorer`, `librarian`, `oracle`, and `observer` (the small model: it is also the run's `small_model`; env override `NIGHTGEM_SMALL_MODEL`). |
+| `review.maxRounds` | no | Integer from 1 to 5, default `2`. The number of review → fix → re-review rounds in the full review phase (see [Review rounds](how-it-works.md#review-rounds-and-failing-closed)). The soft-stop review stays at zero fix-ups. |
 | `audit.bannedTerms` | no | Terms that `doctor --audit-repo` must find 0 times in tracked files. Matched case-insensitively. Local only. |
 
 ### Models

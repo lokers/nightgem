@@ -17,7 +17,7 @@ import {
   type GitRunner,
 } from '../src/gitinfo.ts';
 import type { RunPaths } from '../src/paths.ts';
-import { NARRATIVE_PLACEHOLDER, buildReport, extractManualChecks, extractNarrative, writeReport } from '../src/report.ts';
+import { NARRATIVE_PLACEHOLDER, buildReport, extractManualChecks, extractNarrative, finalReviewVerdict, writeReport } from '../src/report.ts';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/report/', import.meta.url));
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -358,7 +358,7 @@ describe('TaskEvent id conventions', () => {
     const withFile = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
     expect(withFile).toContain(`- Final review: [FINAL_REVIEW.md](${join(FIXTURES, 'completed', 'FINAL_REVIEW.md')})`);
     const without = await buildReport({ paths: fixture('aborted'), git: fakeGit({}) });
-    expect(without).not.toContain('FINAL_REVIEW');
+    expect(without).not.toContain('- Final review: [');
   });
 
   it('wind-down blocked tasks and skipped tasks are called out', async () => {
@@ -517,6 +517,99 @@ describe('buildReport: safety checks', () => {
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
     const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
     expect(attention).not.toContain('Unverified');
+  });
+});
+
+// --- final review verdict --------------------------------------------------------------
+
+describe('finalReviewVerdict', () => {
+  it('accepts APPROVE and APPROVE-WITH-FIXES in any case, with markdown decoration', () => {
+    for (const text of [
+      'VERDICT: APPROVE\n',
+      'Verdict: APPROVE-WITH-FIXES\nRationale: x',
+      '# Final review\n\n**Verdict:** approve\n',
+      '> `VERDICT: APPROVE`',
+      '- verdict : Approve - looks good',
+    ]) {
+      expect(finalReviewVerdict(text), text).toEqual({ ok: true });
+    }
+  });
+
+  it('flags a missing file, an empty one and one without a VERDICT line', () => {
+    expect(finalReviewVerdict(null)).toEqual({ ok: false, reason: 'missing' });
+    expect(finalReviewVerdict('')).toEqual({ ok: false, reason: 'no-verdict' });
+    expect(finalReviewVerdict('Looks fine to me.\nNo issues.')).toEqual({ ok: false, reason: 'no-verdict' });
+  });
+
+  it('flags VERDICT: NONE and REJECT', () => {
+    expect(finalReviewVerdict('VERDICT: NONE\nThe oracle did not answer.')).toEqual({ ok: false, reason: 'none' });
+    expect(finalReviewVerdict('Verdict: REJECT\nBLOCKER ...')).toEqual({ ok: false, reason: 'reject' });
+  });
+
+  it('flags anything else, including the unfilled template and a plan verdict', () => {
+    expect(finalReviewVerdict('VERDICT: APPROVE | APPROVE-WITH-FIXES | REJECT')).toEqual({ ok: false, reason: 'unrecognised', verdict: 'APPROVE | APPROVE-WITH-FIXES | REJECT' });
+    expect(finalReviewVerdict('Verdict: REVISE')).toEqual({ ok: false, reason: 'unrecognised', verdict: 'REVISE' });
+  });
+
+  it('uses the first verdict line, so a later re-check cannot hide a REJECT', () => {
+    expect(finalReviewVerdict('VERDICT: REJECT\n\n## Re-check round 1\nVERDICT: APPROVE')).toEqual({ ok: false, reason: 'reject' });
+  });
+});
+
+describe('buildReport: final review check', () => {
+  const withReview = async (content: string | null): Promise<string> => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'completed'), d, { recursive: true });
+    if (content === null) await rm(join(d, 'FINAL_REVIEW.md'));
+    else await writeFile(join(d, 'FINAL_REVIEW.md'), content);
+    return buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) });
+  };
+  const attentionOf = (md: string): string => md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
+
+  it('an approving review adds nothing to Needs human attention', async () => {
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
+    expect(attentionOf(md)).not.toContain('Final review');
+    for (const v of ['VERDICT: APPROVE', 'Verdict: APPROVE-WITH-FIXES']) {
+      expect(attentionOf(await withReview(`${v}\n`)), v).not.toContain('Final review');
+    }
+  });
+
+  it('flags a missing FINAL_REVIEW.md', async () => {
+    const attention = attentionOf(await withReview(null));
+    expect(attention).toContain('### Final review');
+    expect(attention).toContain('`FINAL_REVIEW.md` is missing: no final review was saved');
+    expect(attention).not.toContain('Nothing flagged');
+  });
+
+  it('flags a review without a VERDICT line', async () => {
+    expect(attentionOf(await withReview('Looks fine to me.\n'))).toContain('has no `VERDICT:` line');
+    expect(attentionOf(await withReview(''))).toContain('has no `VERDICT:` line');
+  });
+
+  it('flags VERDICT: NONE as a review that did not run', async () => {
+    const attention = attentionOf(await withReview('VERDICT: NONE\nThe oracle returned no verdict.\n'));
+    expect(attention).toContain('says `VERDICT: NONE`: the oracle review did not run');
+  });
+
+  it('flags VERDICT: REJECT', async () => {
+    expect(attentionOf(await withReview('Verdict: REJECT\n'))).toContain('says `VERDICT: REJECT`');
+  });
+
+  it('flags an unrecognised verdict by name', async () => {
+    expect(attentionOf(await withReview('VERDICT: REVISE\n'))).toContain('unrecognised verdict "REVISE"');
+  });
+
+  it('flags a run that never reached a review (no FINAL_REVIEW.md in the budget-aborted fixture)', async () => {
+    const abortedRepos: Record<string, FakeRepo> = {
+      [ACME_API]: { head: 'a'.repeat(40), branch: 'master', status: '', stash: ['s'], remote: [] },
+    };
+    const md = await buildReport({ paths: fixture('aborted'), git: fakeGit(abortedRepos) });
+    expect(attentionOf(md)).toContain('`FINAL_REVIEW.md` is missing');
+  });
+
+  it('says nothing about the review when there is no RUN.json to say what ran', async () => {
+    const md = await buildReport({ paths: pathsFor(await tmp()), git: fakeGit({}) });
+    expect(md).toContain('Nothing flagged.');
   });
 });
 

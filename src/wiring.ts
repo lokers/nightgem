@@ -1390,7 +1390,7 @@ export function realOrchestratorDeps(slug: string, home: string = homedir(), opt
     signals: opts.signals ?? processSignals(),
     logger: logEvent,
     secrets,
-    promptContext: { workspaceRoot, workspaceInstructions: snapshot.instructions.text, skillsList: offeredSkillsText(snapshot) },
+    promptContext: { workspaceRoot, workspaceInstructions: snapshot.instructions.text, skillsList: offeredSkillsText(snapshot), reviewMaxRounds: snapshot.profile.data.review.maxRounds },
     renderPrompt,
     async startServer(input: StartRunServerInput) {
       const rules = await specRemoteRules(manifest.repos.map((r) => r.path), git);

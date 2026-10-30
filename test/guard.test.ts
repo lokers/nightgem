@@ -911,7 +911,7 @@ describe('.run dir protection', () => {
   it('SPEC.md stays denied while the other spec-dir markdown files stay writable', () => {
     const spec = (n: string) => decide({ tool: 'edit', input: { filePath: join(vars.SPEC!, n) } }, cfg).verdict;
     expect(spec('SPEC.md')).toBe('block');
-    for (const n of ['PLAN.md', 'STATUS.md', 'DECISIONS.md', 'REPORT.md', 'FINAL_REVIEW.md']) expect(spec(n), n).toBe('allow');
+    for (const n of ['PLAN.md', 'STATUS.md', 'DECISIONS.md', 'REPORT.md', 'FINAL_REVIEW.md', 'MANUAL_CHECKS.md']) expect(spec(n), n).toBe('allow');
   });
   it('an explicit list narrows or closes the dir; RUN.json/opencode.json can never be listed in', () => {
     expect(edit('decisions.jsonl', { ...cfg, runWritable: ['tasks.jsonl'] })).toBe('block');

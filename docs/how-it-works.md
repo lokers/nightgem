@@ -107,6 +107,15 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `~/Library/Application Support/nightgem/<slug>/xdg-data/` | The run's own OpenCode database (isolated `XDG_DATA_HOME`) |
 | `<repo>/.worktrees/<slug>/<task>` and `/_integration` | Task and integration worktrees on local branches |
 
+## Review rounds and failing closed
+
+The full review phase asks @oracle for a final review, then runs up to `review.maxRounds` fix rounds ([profile](profile.md#fields), integer 1 to 5, default 2). A round fixes the open BLOCKER and MAJOR findings as `review-fix-<n>` tasks, re-verifies the integration branch, and asks @oracle to re-check only those findings. The phase stops early when none remain open, and a finding that a round did not fix is retried at most once. Whatever is still open after the last round is logged as a Decision with `needsHumanAttention: true`. The short review after a soft stop (`phase-review-lite`) never fixes anything.
+
+A review that did not run must not look like one that did:
+
+- If an @oracle review (plan or final) returns no verdict, the orchestrator asks once more. If there is still none, it logs a Decision with `needsHumanAttention: true`, and it never substitutes its own review. A final review without a verdict is saved as `FINAL_REVIEW.md` starting with `VERDICT: NONE`.
+- `REPORT.md` checks this without a model. Under "Needs human attention" it flags a `FINAL_REVIEW.md` that is missing, has no `VERDICT:` line (`Verdict:` is accepted too), says `NONE` or `REJECT`, or carries any other verdict than `APPROVE` or `APPROVE-WITH-FIXES`. The first verdict line counts, so a re-check appended after a fix round does not hide a `REJECT`.
+
 ## Verification matrix and checks by hand
 
 Runs have no browser or dev server, on purpose, so some success criteria can only be checked by a person. The run keeps track of them instead of letting them fall through:

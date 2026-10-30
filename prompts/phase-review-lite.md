@@ -8,9 +8,13 @@ No human is present. Do not ask questions. Decide and log.
    paths, branch names, the diffs (`git diff origin/<default>...<branch>`, or the local default if there is no `origin`),
    the last verify results from `{{tasksJsonl}}` and `{{decisionsMd}}`. Say what was wound down and which tasks are
    unfinished. Do not re-run builds or tests.
-3. **No fix-ups and no new tasks.** Do not dispatch @fixer or @designer. Whatever is wrong or unfinished goes into a Decision
+   **Fail closed.** If @oracle returns no verdict (an error, a timeout, an empty answer or one without a verdict), ask once
+   more. If the second try also gives no verdict, log a Decision of kind `other` with `needsHumanAttention: true` that says
+   the review did not run. Never substitute your own review for @oracle's, and never read a missing verdict as approval.
+3. **No fix-ups and no new tasks.** The full review allows up to {{reviewMaxRounds}} fix rounds; this one allows none. Do not dispatch @fixer or @designer. Whatever is wrong or unfinished goes into a Decision
    of kind `other` with `needsHumanAttention: true`, mirrored to `{{decisionsMd}}`.
-4. Save the oracle's review verbatim to `{{specsDir}}/FINAL_REVIEW.md`.
+4. Save the oracle's review verbatim to `{{specsDir}}/FINAL_REVIEW.md`. If there was no verdict after the retry, write
+   `VERDICT: NONE` as its first line, then one line saying why.
 5. Write `{{specsDir}}/MANUAL_CHECKS.md`, overwriting any older one: a `- [ ]` checklist for the human, one item per line with
    the exact steps. Include every `manual:` row of the Verification matrix in `{{planMd}}` (read just that section), the
    success criteria of tasks that were not finished, and anything the review could not verify. Nothing to check: write the
@@ -18,7 +22,7 @@ No human is present. Do not ask questions. Decide and log.
 6. Append the phase-done TaskEvent for `phase:review` (`id: "phase:review"`, `state: "done"`, `phase: "review"`, `repo: "_run"`,
    `branch: "-"`, `worktree: "{{specsDir}}"`) to `{{tasksJsonl}}`. Then append the `RunComplete` line to
    `{{eventsDir}}/run-complete.json` (summary in plain words, `finalReviewPath` = `{{specsDir}}/FINAL_REVIEW.md`).
-   That is your last action. Do it even if the oracle did not answer: say so in `FINAL_REVIEW.md`.
+   That is your last action. Do it even if the oracle did not answer: `FINAL_REVIEW.md` then starts with `VERDICT: NONE`.
 
 On a resumed run, files named `run-complete-attempt<n>.json` and `FINAL_REVIEW-attempt<n>.md` are the markers of an earlier
 attempt. Ignore them and write fresh `FINAL_REVIEW.md` and `run-complete.json` files.

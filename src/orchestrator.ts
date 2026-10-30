@@ -257,6 +257,8 @@ export interface PromptContext {
   workspaceRoot: string;
   workspaceInstructions: string;
   skillsList: string;
+  /** The profile's `review.maxRounds`: review -> fix -> re-review rounds of the full review phase. */
+  reviewMaxRounds: number;
 }
 
 export interface OrchestratorDeps {
@@ -1006,6 +1008,7 @@ class Run {
       workspaceRoot: this.d.promptContext.workspaceRoot,
       workspaceInstructions: this.d.promptContext.workspaceInstructions,
       skillsList: this.d.promptContext.skillsList,
+      reviewMaxRounds: this.d.promptContext.reviewMaxRounds,
       ...extra,
     };
   }

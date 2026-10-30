@@ -32,6 +32,10 @@ No human is present. Do not ask questions. Decide and log.
    "Risky changes" list (new dependency, migration, API contract change) with the reason each is unavoidable.
 5. Ask @oracle for a mandatory plan review. It also checks the Verification matrix against the SPEC and answers REVISE if a criterion is missing. Revise PLAN.md for every required change. At most 2 review rounds.
    If @oracle still answers REVISE after round 2, proceed with your best plan and log a Decision with `needsHumanAttention: true`.
+   **Fail closed.** If @oracle returns no verdict (an error, a timeout, an empty answer or one without APPROVE or REVISE), ask
+   once more. If the second try also gives no verdict, proceed with your best plan, log a Decision with
+   `needsHumanAttention: true` saying the plan review did not run, and leave `oracleApproved` unset. Never substitute your
+   own review for @oracle's, and never read a missing verdict as approval.
 6. Append a `plan` Decision to `{{decisionsJsonl}}`, mirror it to `{{decisionsMd}}`, with the oracle verdict in `oracleApproved`.
    Log other choices (resolved spec gaps, base-branch notes, risky changes) as Decisions too.
 7. Write the task board to `{{statusMd}}` with every task `todo`, and append a `todo` TaskEvent per task to `{{tasksJsonl}}`

@@ -325,6 +325,12 @@ describe('run-context snapshot', () => {
     expect(() => readRunContext(dir)).toThrow(expect.objectContaining({ code: 'run-context-invalid' }));
   });
 
+  it('realOrchestratorDeps hands the profile\'s review.maxRounds to the prompt context', () => {
+    seedContext({ review: { maxRounds: 4 } });
+    writeRun();
+    expect(realOrchestratorDeps(SLUG, home, { env: {} }).promptContext.reviewMaxRounds).toBe(4);
+  });
+
   it('realOrchestratorDeps reads only the snapshot: workspace, prompt context, models and safety come from it', () => {
     const instr = join(home, 'instr.md');
     writeFileSync(instr, 'Workspace rules here');
@@ -339,7 +345,12 @@ describe('run-context snapshot', () => {
     rmSync(join(home, '.config'), { recursive: true });
     const d = realOrchestratorDeps(SLUG, home, { env: { NIGHTGEM_FIXER_MODEL: 'nope/ignored' } });
     expect(d.paths.workspaceRoot).toBe(workspaceRoot);
-    expect(d.promptContext).toEqual({ workspaceRoot, workspaceInstructions: 'Workspace rules here', skillsList: '- idea-refine\n- test-driven-development' });
+    expect(d.promptContext).toEqual({
+      workspaceRoot,
+      workspaceInstructions: 'Workspace rules here',
+      skillsList: '- idea-refine\n- test-driven-development',
+      reviewMaxRounds: 2,
+    });
     expect(d.smallModel).toBe('openai/tiny');
     expect(d.serverInput.agentModels?.fixer).toEqual({ model: 'openai/gpt-9', variant: 'high' });
     expect(d.serverInput.safety).toEqual(snap.safety);

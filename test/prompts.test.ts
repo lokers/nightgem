@@ -32,6 +32,7 @@ const VARS: PromptVars = {
   budgetUsd: 100,
   workspaceRoot: '/Users/alice/work',
   workspaceInstructions: 'ACME-WS-INSTRUCTIONS: commits put the ticket in the body.',
+  reviewMaxRounds: 3,
   skillsList: '- test-driven-development\n- incremental-implementation\n- code-review-and-quality\n- planning-and-task-breakdown',
 };
 
@@ -392,9 +393,10 @@ describe('phase prompts', () => {
     expect(PROMPT_NAMES).toContain('phase-review-lite');
   });
 
-  it('phase-review: one fix-up round, then RunComplete', () => {
+  it('phase-review: bounded fix-up rounds, then RunComplete', () => {
     const out = render('phase-review');
-    expect(out).toMatch(/At most one fix-up round/);
+    expect(out).toMatch(/at most 3 fix rounds/i);
+    expect(out).not.toMatch(/At most one fix-up round/);
     expect(out).toContain('RunComplete');
     expect(out).toContain(`${VARS.eventsDir}/run-complete.json`);
     expect(out).toContain('FINAL_REVIEW.md');
@@ -504,6 +506,49 @@ describe('verification matrix and manual checks (#13)', () => {
 
   it('the orchestrator append names the matrix in the plan gate', () => {
     expect(render('orchestrator_append')).toContain('Verification matrix');
+  });
+});
+
+describe('review rounds and fail-closed reviews (#11)', () => {
+  it('phase-review needs reviewMaxRounds and renders the configured count', () => {
+    expect(promptVars('phase-review')).toContain('reviewMaxRounds');
+    expect(promptVars('phase-review-lite')).toEqual(promptVars('phase-review'));
+    for (const n of [1, 2, 5]) {
+      const out = renderPrompt('phase-review', { ...VARS, reviewMaxRounds: n });
+      expect(out, String(n)).toMatch(new RegExp(`at most ${n} fix rounds`, 'i'));
+      expect(out, String(n)).not.toContain('{{');
+    }
+  });
+
+  it('a round re-checks only open BLOCKER and MAJOR findings, stops early and retries a finding at most once', () => {
+    const out = render('phase-review');
+    expect(out).toMatch(/only the open BLOCKER and MAJOR findings/);
+    expect(out).toMatch(/Stop early/);
+    expect(out).toMatch(/not fixed in a round is\s+retried at most once/);
+  });
+
+  it('the lite review stays at zero fix-ups', () => {
+    const out = render('phase-review-lite');
+    expect(out).toMatch(/No fix-ups and no new tasks/);
+    expect(out).toMatch(/this one allows none/);
+    expect(out).not.toMatch(/Dispatch the fixes/);
+  });
+
+  it('every prompt that asks @oracle for a review fails closed on a missing verdict', () => {
+    for (const name of ['orchestrator_append', 'phase-plan', 'phase-review', 'phase-review-lite'] as const) {
+      const out = render(name);
+      expect(out, name).toMatch(/no verdict/);
+      expect(out, name).toMatch(/ask\s+once\s+more|retry once/);
+      expect(out, name).toContain('needsHumanAttention: true');
+      expect(out, name).toMatch(/never substitute your\s+own review/i);
+    }
+  });
+
+  it('a final review that did not run is saved as VERDICT: NONE', () => {
+    for (const name of ['phase-review', 'phase-review-lite'] as const) {
+      expect(render(name), name).toContain('VERDICT: NONE');
+    }
+    expect(render('orchestrator_append')).toContain('VERDICT: NONE');
   });
 });
 

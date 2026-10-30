@@ -1,5 +1,5 @@
 /**
- * The user profile: the only source of user-specific facts (workspace, tracker, skills, denies, models, audit terms).
+ * The user profile: the only source of user-specific facts (workspace, tracker, skills, denies, models, review rounds, audit terms).
  *
  * Pure and explicit: `loadProfile` takes `home`, `env` and `fs` and has no defaults, so tests (and the
  * launcher) control exactly what is read. This module imports nothing from the rest of the app.
@@ -103,6 +103,12 @@ export const UserProfile = z.strictObject({
     .prefault({}),
   /** agent name -> `provider/model[#variant]` */
   models: z.record(nonEmpty, nonEmpty.regex(MODEL_SPEC_RE, { message: 'expected "provider/model" or "provider/model#variant"' })).default({}),
+  /** The full review phase: review -> fix -> re-review rounds (the soft-stop lite review never fixes). */
+  review: z
+    .strictObject({
+      maxRounds: z.number().int().min(1).max(5).default(2),
+    })
+    .prefault({}),
   audit: z.strictObject({ bannedTerms: z.array(nonEmpty).default([]) }).prefault({}),
 });
 export type UserProfile = z.output<typeof UserProfile>;

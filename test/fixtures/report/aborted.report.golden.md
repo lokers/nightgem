@@ -48,6 +48,10 @@ Never started (skipped): metrics
 
 ## Needs human attention
 
+### Final review
+
+- `FINAL_REVIEW.md` is missing: no final review was saved, so @oracle did not review this run's work.
+
 ### Decisions
 
 - **D-1** (migration, oracle: REJECTED): Add column users.nickname
