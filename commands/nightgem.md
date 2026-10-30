@@ -63,6 +63,10 @@ autonomous phase runs in a separate detached process. After launch you do nothin
   - cross-repo order if more than one repo is involved (for example the API provider first,
     then the generated client, then the consumers).
 - Success criteria that can be checked by the repo's own tooling.
+- Optionally a `## Quality bar` section. If an affected repo has a `CONSTRAINTS.md` (its written quality bar, such as coverage,
+  accessibility or performance thresholds), name it there by path (for example `acme-api/CONSTRAINTS.md`) and say which
+  thresholds matter for this task. The run reads each repo's `CONSTRAINTS.md` itself, treats its thresholds as acceptance
+  criteria and checks them in the final review. Do not invent thresholds, and leave the section out when there is none.
 - State plainly that the run never pushes, opens PRs, merges, or touches the issue tracker.
 
 ## Part 2: Spec gate

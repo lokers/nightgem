@@ -24,6 +24,7 @@ what was already done, including `wip:` commits). Never redo a `done` task.
    absolute worktree path, owned files, acceptance criteria, repo conventions, commit format, verify commands, and
    "commit locally, do not push". Tell the worker to load `incremental-implementation` and `test-driven-development` if they are listed
    under Available skills in your system instructions.
+   Pass on the task's review focus, and tell the worker to read the repo's `CONSTRAINTS.md` if it has one.
    Run independent lanes in parallel (at most 4). No two writers share files. Keep each delegated task under about 45 minutes.
    Tell the worker to pass an explicit shell `timeout` (ms) for long commands: `npm ci`, nx and `go test` get 900000 to
    1080000, never more than 1080000. Task verify commands are project-scoped (`CI=1 npx nx run <proj>:test --outputStyle=stream`,
@@ -31,15 +32,22 @@ what was already done, including `wip:` commits). Never redo a `done` task.
 4. On every state change append a TaskEvent to `{{tasksJsonl}}` and update `{{statusMd}}`.
 5. When a task returns, check the diff and the exit codes yourself. On failure run the fix-up loop: up to 3 fix-up attempts,
    @oracle after the 2nd. Then BLOCKED, dependents `skipped`, independent lanes continue.
-6. Cross-repo: follow the cross-repo order and the generated-code flow in the workspace instructions in your system
+6. **Task review for `Review: deep` tasks.** Before a verified `Review: deep` task is merged into the integration branch (step 9),
+   ask @oracle for an @oracle task review: give it the task's diff (`git diff <base>...<branch>`), its acceptance criteria,
+   its review focus from `{{planMd}}` and the repo's `CONSTRAINTS.md` if it has one. Put its BLOCKER and MAJOR findings into the
+   task's fix-up loop (step 5): a fix-up that answers findings counts as one of the 3 attempts, and @oracle re-checks only
+   those findings afterwards. Merge only when no BLOCKER or MAJOR finding is open, and record the verdict in the TaskEvent's
+   `oracleVerdict`. If @oracle gives no verdict, ask once more; if there is still none, log a Decision with
+   `needsHumanAttention: true`, never review the task yourself, and carry on (the final review still covers it).
+7. Cross-repo: follow the cross-repo order and the generated-code flow in the workspace instructions in your system
    instructions. Never hand-edit generated files: regenerate them with the repo's own generator.
-7. Risky changes not covered by the spec (new dependency, migration, API contract change) need @oracle approval first.
+8. Risky changes not covered by the spec (new dependency, migration, API contract change) need @oracle approval first.
    Log a Decision with `needsHumanAttention: true`. A rejection means the task is BLOCKED.
-8. Merge each verified task branch into its repo's integration branch (`--no-ff`, in the `_integration` worktree) in
+9. Merge each verified task branch into its repo's integration branch (`--no-ff`, in the `_integration` worktree) in
    dependency order. Run the repo's full lint, typecheck, test and build there (each with a shell `timeout` of 900000 to
    1080000, never more), and record the exit codes in a TaskEvent
    with `id: "integration:<repo>"`, `state` `done` or `blocked`, `branch` the integration branch, `phase: "build"`.
-9. When no task is `todo`, `running`, `verifying` or `fixing` (counting the wind-down-parked tasks of an earlier attempt as `todo`), append the phase-done TaskEvent for `phase:build` and stop.
+10. When no task is `todo`, `running`, `verifying` or `fixing` (counting the wind-down-parked tasks of an earlier attempt as `todo`), append the phase-done TaskEvent for `phase:build` and stop.
    Do not run the final review in this phase.
 
 Append log lines with a quoted-delimiter heredoc (`cat >> {{tasksJsonl}} <<'EOF'`) or the write tool, never `echo "..."`.

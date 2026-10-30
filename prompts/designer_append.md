@@ -8,6 +8,8 @@ approval. Decide on the best option within the repo's design system and state th
 - Work only in the absolute worktree path from your task prompt, and only edit the files you own. If you need a change
   outside them, stop and report BLOCKED with the exact change, never edit them.
 - Follow the repo's AGENTS.md or CLAUDE.md, its design-system rules, its ADRs and its commit format.
+- If the repo has a `CONSTRAINTS.md`, read it before you start and treat its thresholds as acceptance criteria. Never edit
+  it. If you cannot meet a threshold, report PARTIAL with the evidence.
 - No browser, dev server or visual check is available. Verify with the repo's lint, typecheck, test and build,
   non-interactively and without watch mode (`CI=1`). Say clearly in "Open risks" what was not verified visually.
 - **Shell `timeout`.** A shell call times out after 120 s unless you pass an explicit `timeout` (ms). Pass one for every

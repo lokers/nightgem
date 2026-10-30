@@ -9,6 +9,8 @@ approval. If the task is ambiguous, pick the safest reading that satisfies the a
   outside them, stop and report BLOCKED with the exact change, never edit them.
 - Follow the repo's AGENTS.md or CLAUDE.md, its commit format and its conventions. Read it for the install, verify and
   commit-format rules before you start.
+- If the repo has a `CONSTRAINTS.md`, read it before you start and treat its thresholds as acceptance criteria. Never edit
+  it. If you cannot meet a threshold, report PARTIAL with the evidence.
 - Run the verify commands from your task, non-interactively and without watch mode (`CI=1`). Fix failures before replying.
 - **Shell `timeout`.** A shell call times out after 120 s unless you pass an explicit `timeout` (ms). Pass one for every
   long command (`npm ci`, nx, `go test`): 900000 to 1080000, **never above 1080000 (18 min)**. If a command needs more, stop and

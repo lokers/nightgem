@@ -26,6 +26,7 @@ The [README](../README.md#how-it-works) has the short version (the gem-factory n
 - Each phase is a separate root session, which gives exact per-phase cost and less compaction. State passes between phases through files in `<workspaceRoot>/.specs/<slug>/`.
 - Worktrees: `<repo>/.worktrees/<slug>/<task>` on `<type>/<TICKET|slug>-<task>`. Each repo also gets an integration branch `<type>/<TICKET|slug>` in `<repo>/.worktrees/<slug>/_integration`. Full verification runs there. Branches are cut from the freshly fetched default branch.
 - Failure policy: up to 3 fix-up attempts per task, @oracle is consulted after the 2nd, then the task is BLOCKED and its dependents are skipped. Independent lanes continue.
+- Every task has a review level (`Review: standard` or `deep`), see [Review levels and the quality bar](#review-levels-and-the-quality-bar).
 - Risky changes the spec does not mention (new dependency, migration, API contract change) need @oracle approval. Each is logged in `DECISIONS.md` and listed under "Needs human attention".
 - A watchdog nudges an idle root session (at most 10 times), aborts sessions that are silent for 20 minutes, backs off on 429/5xx, and ends the run after a 10 h wall clock.
 - Run states: `launching`, `running`, `winding-down`, `stopping`, then one of `completed`, `failed`, `stalled`, `aborted-budget`, `stopped`. A terminal run is never acted on again, so a restart of the job does nothing; only [`resume`](#resume) continues it.
@@ -38,7 +39,7 @@ The launcher refuses a spec unless:
 - it has a `Status: APPROVED (...)` line;
 - an `## Affected repos` table has, in its first column, backticked repo names such as `` `acme-api` ``, each a git repo directly under the workspace (`--repos a,b` overrides the table).
 
-The spec should also have an `## Autonomy notes` section: what agents may decide alone, what needs @oracle approval, what is out of scope, and how to verify. The `/nightgem` command writes all of this for you.
+The spec should also have an `## Autonomy notes` section: what agents may decide alone, what needs @oracle approval, what is out of scope, and how to verify. It may have an optional `## Quality bar` section that points at a repo's `CONSTRAINTS.md` (see [below](#review-levels-and-the-quality-bar)). The `/nightgem` command writes all of this for you.
 
 ## Budget accounting
 
@@ -106,6 +107,14 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `~/Library/Application Support/nightgem/<slug>/` | Password file, heartbeat, control flags, `run-context.json`, launchd plist and logs (0700) |
 | `~/Library/Application Support/nightgem/<slug>/xdg-data/` | The run's own OpenCode database (isolated `XDG_DATA_HOME`) |
 | `<repo>/.worktrees/<slug>/<task>` and `/_integration` | Task and integration worktrees on local branches |
+
+## Review levels and the quality bar
+
+The plan gives every task a **review level** and a **review focus**, so risky work is not reviewed only once, at the end, as part of one large diff.
+
+- `Review: standard` is the default. `Review: deep` is **required** for a task that touches authentication, authorization or input handling (focus `security`), a DB migration (`migration`), an API contract or public interface (`api`), or code the spec calls performance-sensitive (`performance`). A `ui` focus fits visual or interaction work. @oracle's plan review sends the plan back (`REVISE`) when a trigger applies and the task is not `deep`.
+- A `deep` task gets an **@oracle task review before its branch is merged** into the integration branch. The reviewer gets the task's diff, its focus and its acceptance criteria, and loads the matching skill (for example for security, performance or API design) if the profile's skill list offers one. Its BLOCKER and MAJOR findings go into the task's normal fix-up loop (3 attempts, a fix-up that answers findings counts as one), and the merge waits until none is open. The verdict is recorded as the task's `oracleVerdict`. If @oracle gives no verdict the run fails closed, as described [below](#review-rounds-and-failing-closed): one retry, then a Decision for the human.
+- **The repo's own quality bar.** If a repo has a `CONSTRAINTS.md` (coverage, accessibility or performance thresholds, as written by a constraint-driven workflow), the planner, fixer, designer and oracle read it and treat its thresholds as acceptance criteria, and the final review checks them. Agents never edit that file. A spec may point at it from an optional `## Quality bar` section; the run does not need the section to find the file.
 
 ## Review rounds and failing closed
 

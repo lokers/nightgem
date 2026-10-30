@@ -2,12 +2,20 @@ Phase: plan (run `{{slug}}`). Act only within this phase.
 
 No human is present. Do not ask questions. Decide and log.
 
-1. Read `{{specMd}}` fully. Read the AGENTS.md, CLAUDE.md and `.cursor/rules` of every repo it affects.
+1. Read `{{specMd}}` fully. Read the AGENTS.md, CLAUDE.md and `.cursor/rules` of every repo it affects. If a repo has a
+   `CONSTRAINTS.md` (its written quality bar), read it too and treat its thresholds as acceptance criteria: put the ones
+   that apply into the tasks' acceptance criteria and into the Verification matrix. If `{{specMd}}` has a `## Quality bar`
+   section, follow it.
 2. Load the `planning-and-task-breakdown` skill if it is listed under Available skills in your system instructions. Write `{{planMd}}` with small, verifiable tasks. For each task give:
    - `id`: kebab-case, letters, digits and `-` only, at most 60 chars, never `_integration`, and no standalone `push`, `gh` or
      `ssh` word (use `alerts`, `release-web`, ...): the guard and launcher reject them in branch names;
    - repo, worktree path `<repo>/.worktrees/{{slug}}/<id>`, branch `<type>/<TICKET|slug>-<id>`;
    - owned files (disjoint across tasks), depends-on, agent (@fixer, or @designer for UI polish);
+   - `Review: standard` or `Review: deep`, and a review focus: one or more of `security`, `performance`, `api`, `migration`,
+     `ui`. `deep` is required when the task touches authentication, authorization or input handling (focus `security`), a
+     DB migration (`migration`), an API contract or public interface (`api`), or code the SPEC calls performance-sensitive
+     (`performance`). A `ui` focus fits visual or interaction work. Everything else is `standard`. A `deep` task gets an
+     @oracle task review before it is merged into the integration branch;
    - acceptance criteria and the exact non-interactive verify commands from that repo's docs (no watch mode);
    - an estimate under about 45 minutes. Split larger work;
    - project-scoped verify commands for the task lane (`npx nx run <proj>:test`, `go test ./pkg/...`). The full suite runs

@@ -330,7 +330,7 @@ describe('command templates', () => {
 
   it('spec phase reads the tracker from the profile and gates auto-claim on the profile', () => {
     const t = read('nightgem');
-    for (const needle of ['profile show --json', 'instructionsFile', 'tracker.keyPattern', 'tracker.fetchCommand', '{KEY}', 'tracker.linkedFetchCommand', '{KEYS}', 'tracker.notes', 'tracker.autoClaim.enabled', 'autoClaim.when.status', 'autoClaim.when.unassigned', 'autoClaim.command', 'autoClaim.verifyCommand', 'paste', '## Affected repos', '## Autonomy notes', 'spec-driven-development', 'Never launch past a hard failure', 'JIRA-123']) {
+    for (const needle of ['profile show --json', 'instructionsFile', 'tracker.keyPattern', 'tracker.fetchCommand', '{KEY}', 'tracker.linkedFetchCommand', '{KEYS}', 'tracker.notes', 'tracker.autoClaim.enabled', 'autoClaim.when.status', 'autoClaim.when.unassigned', 'autoClaim.command', 'autoClaim.verifyCommand', 'paste', '## Affected repos', '## Autonomy notes', '## Quality bar', 'CONSTRAINTS.md', 'spec-driven-development', 'Never launch past a hard failure', 'JIRA-123']) {
       expect(t, needle).toContain(needle);
     }
   });

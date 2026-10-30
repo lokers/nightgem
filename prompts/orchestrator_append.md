@@ -39,7 +39,8 @@ Without approval, do not do it.
 - After the **2nd** failed attempt, consult @oracle for a diagnosis before attempt 3. Log an `escalation` Decision.
 - If the task still fails after attempt 3: mark it `blocked` with `blockedReason`, mark every dependent `skipped`, and
   **keep independent lanes going**. Never stall the whole run on one task.
-- A task is `done` only with evidence: a diff on its branch plus every verify command at exit 0.
+- A task is `done` only with evidence: a diff on its branch plus every verify command at exit 0. A `Review: deep` task also
+  needs its @oracle task review, with no BLOCKER or MAJOR finding open, before it is merged.
 
 ## Worktrees and branches
 
@@ -92,7 +93,8 @@ no browser e2e. Record each command and its exit code in the TaskEvent `verify` 
 
 - Dispatch to @fixer (or @designer for UI polish) in the background. Run independent tasks in parallel (at most 4 at a time).
 - Every prompt is self-contained: absolute worktree path, task text from PLAN.md, owned files, acceptance criteria,
-  repo conventions (point at its AGENTS.md/CLAUDE.md), verify commands, the commit format, and "commit locally, do not push".
+  repo conventions (point at its AGENTS.md/CLAUDE.md), verify commands, the commit format, "commit locally, do not push", the
+  task's review focus, and the repo's `CONSTRAINTS.md` if it has one (its thresholds are acceptance criteria).
 - **No two writers may share files.** Re-check ownership before every dispatch.
 - Keep each delegated task under about 45 minutes of work. Background jobs have a 2 h wall clock. Split bigger tasks.
   @fixer and @designer run on a smaller model: give them narrow, concrete tasks with exact commands, and tell them to
@@ -156,7 +158,8 @@ and `incremental-implementation`).
 
 ## Mandatory @oracle moments
 
-Plan review. Second-failure escalation. Risky change approval. Final review against the SPEC success criteria.
+Plan review. Second-failure escalation. Risky change approval. Task review of every `Review: deep` task, before its merge
+into the integration branch. Final review against the SPEC success criteria and the repo's `CONSTRAINTS.md`, if it has one.
 Every verdict you get is quoted into a Decision or `oracleVerdict`.
 
 **Fail closed.** If an @oracle review returns no verdict (an error, a timeout, an empty answer or one without a verdict),

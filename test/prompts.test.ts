@@ -552,6 +552,77 @@ describe('review rounds and fail-closed reviews (#11)', () => {
   });
 });
 
+describe('review levels and the repo quality bar (#12)', () => {
+  it('phase-plan gives every task a Review level and focus, with the deep triggers', () => {
+    const out = render('phase-plan');
+    expect(out).toMatch(/`Review: standard`/);
+    expect(out).toMatch(/`Review: deep`/);
+    expect(out).toMatch(/review focus/);
+    for (const focus of ['security', 'performance', 'api', 'migration', 'ui']) expect(out, focus).toMatch(new RegExp(`\`${focus}\``));
+    expect(out).toMatch(/`deep` is required/);
+    for (const trigger of [/auth/, /input handling/, /migration/, /API contract/, /performance-sensitive/]) expect(out).toMatch(trigger);
+  });
+
+  it('phase-plan reads CONSTRAINTS.md and treats its thresholds as acceptance criteria', () => {
+    const out = render('phase-plan');
+    expect(out).toContain('CONSTRAINTS.md');
+    expect(out).toMatch(/thresholds as acceptance\s+criteria/);
+  });
+
+  it('phase-build sends a deep task to an @oracle task review before the merge, and feeds findings into the fix-up loop', () => {
+    const out = render('phase-build');
+    expect(out).toMatch(/`Review: deep`/);
+    expect(out).toMatch(/@oracle task review/);
+    expect(out).toMatch(/Before a verified `Review: deep` task is merged/);
+    expect(out).toMatch(/fix-up loop/);
+    expect(out).toContain('review focus');
+    expect(out).toContain('CONSTRAINTS.md');
+    expect(out).toMatch(/no verdict/);
+  });
+
+  it('orchestrator_append lists the task review as a mandatory @oracle moment and passes the focus and CONSTRAINTS.md on', () => {
+    const out = render('orchestrator_append');
+    const moments = out.slice(out.indexOf('## Mandatory @oracle moments'), out.indexOf('## Budget awareness'));
+    expect(moments).toMatch(/Task review of every `Review: deep` task/);
+    expect(moments).toMatch(/Plan review\./);
+    expect(moments).toMatch(/Final review/);
+    expect(out).toContain('CONSTRAINTS.md');
+  });
+
+  it('oracle_append has a task-review duty that loads a matching skill only if it is listed', () => {
+    const out = render('oracle_append');
+    expect(out).toMatch(/\*\*Task review\.\*\*/);
+    expect(out).toMatch(/Review: deep/);
+    expect(out).toMatch(/matching skill if it is\s+listed/);
+    expect(out).toContain('## Available skills');
+    expect(out).toContain(String(VARS.skillsList));
+    expect(out).toContain('CONSTRAINTS.md');
+  });
+
+  it('the final review checks the repo quality bar', () => {
+    expect(render('oracle_append')).toMatch(/`CONSTRAINTS.md`[^\n]*met/);
+    expect(render('phase-review')).toContain('CONSTRAINTS.md');
+  });
+
+  it.each(['fixer_append', 'designer_append'] as const)('%s reads CONSTRAINTS.md, treats its thresholds as acceptance criteria and never edits it', (name) => {
+    const out = render(name);
+    expect(out).toContain('CONSTRAINTS.md');
+    expect(out).toMatch(/thresholds as acceptance\s+criteria/);
+    expect(out).toMatch(/never edit\s+it/i);
+  });
+
+  it('names a skill only conditionally ("if it is listed"), never as a given', () => {
+    const named = ['security-and-hardening', 'performance-optimization', 'api-and-interface-design'];
+    for (const name of PROMPT_NAMES) {
+      for (const para of render(name).split(/\n\s*\n/)) {
+        for (const skill of named) {
+          if (para.includes(skill)) expect(para, `${name}: ${skill}`).toMatch(/if (?:it|they) (?:is|are)\s+listed|when (?:it|they) (?:is|are)\s+listed/);
+        }
+      }
+    }
+  });
+});
+
 describe('JSON example lines parse with the contracts', () => {
   function jsonLines(text: string): unknown[] {
     const lines: unknown[] = [];
