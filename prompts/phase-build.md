@@ -37,8 +37,10 @@ what was already done, including `wip:` commits). Never redo a `done` task.
    its review focus from `{{planMd}}` and the repo's `CONSTRAINTS.md` if it has one. Put its BLOCKER and MAJOR findings into the
    task's fix-up loop (step 5): a fix-up that answers findings counts as one of the 3 attempts, and @oracle re-checks only
    those findings afterwards. Merge only when no BLOCKER or MAJOR finding is open, and record the verdict in the TaskEvent's
-   `oracleVerdict`. If @oracle gives no verdict, ask once more; if there is still none, log a Decision with
-   `needsHumanAttention: true`, never review the task yourself, and carry on (the final review still covers it).
+   `oracleVerdict`. If @oracle gives no verdict, ask once more; if there is still none, never review the task yourself: write
+   `oracleVerdict: "NONE (task review did not run)"` on its TaskEvent, log a Decision with `needsHumanAttention: true`, and
+   carry on and merge it, unless it is also a risky change (step 8) that @oracle has not approved: that task stays BLOCKED. The
+   final review is handed every deep task whose task review did not run and reviews it.
 7. Cross-repo: follow the cross-repo order and the generated-code flow in the workspace instructions in your system
    instructions. Never hand-edit generated files: regenerate them with the repo's own generator.
 8. Risky changes not covered by the spec (new dependency, migration, API contract change) need @oracle approval first.

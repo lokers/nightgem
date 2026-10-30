@@ -677,13 +677,14 @@ function attentionSection(ctx: Ctx): string[] {
   const defects = ctx.manifest?.defects ?? [];
   const blocked = [...ctx.tasks, ...ctx.integrations.values()].filter((t) => t.state === 'blocked');
   const unverified = ctx.pushChecks.filter((c) => c.state === 'unknown' || c.state === 'no-repo');
+  const unreviewed = ctx.tasks.filter((t) => t.oracleVerdict !== undefined && /^none\b/i.test(t.oracleVerdict));
   const withHits = ctx.suppressionScans.filter((s) => s.hits !== null && s.hits.length > 0);
   const unscanned = ctx.suppressionScans.filter((s) => s.hits === null);
   // without a RUN.json nothing is known about what ran, and a report written mid-run (`nightgem report`) is too early to
   // say the review is missing: only a run that has ended is held to it
   const ended = ctx.manifest !== null && isTerminalRunState(ctx.manifest.state);
   const review = ended ? finalReviewVerdict(ctx.finalReviewText) : ({ ok: true } as const);
-  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0 && unscanned.length === 0 && review.ok) {
+  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && unreviewed.length === 0 && withHits.length === 0 && unscanned.length === 0 && review.ok) {
     out.push('Nothing flagged.');
     return out;
   }
@@ -705,6 +706,12 @@ function attentionSection(ctx: Ctx): string[] {
       const wd = t.blockedReason?.startsWith(WIND_DOWN_PREFIX) ? ' [unfinished at wind-down]' : '';
       out.push(`- **${t.id}** (${t.repo}, ${t.branch})${wd}: ${t.blockedReason ?? '(no reason recorded)'}`);
     }
+    out.push('');
+  }
+  if (unreviewed.length > 0) {
+    out.push('### Task reviews that did not run', '');
+    out.push('These `Review: deep` tasks were merged without their @oracle task review. The final review was meant to cover them; check it did:', '');
+    for (const t of unreviewed) out.push(`- **${t.id}** (${t.repo}, ${t.branch}): ${t.oracleVerdict}`);
     out.push('');
   }
   if (unverified.length > 0) {

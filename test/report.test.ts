@@ -603,6 +603,22 @@ describe('buildReport: final review check', () => {
     }
   });
 
+  it('flags a task whose task review did not run (oracleVerdict starts with NONE), and only those', async () => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'completed'), d, { recursive: true });
+    const line = (id: string, oracleVerdict: string): string =>
+      JSON.stringify({ ts: '2026-10-21T22:00:00.000Z', id, repo: 'acme-api', branch: `feat/${id}`, worktree: `${API_WT}-${id}`, state: 'done', attempt: 1, verify: [], phase: 'build', oracleVerdict });
+    const tasks = await readFile(join(d, 'tasks.jsonl'), 'utf8');
+    await writeFile(join(d, 'tasks.jsonl'), `${tasks}\n${line('auth-login', 'NONE (task review did not run)')}\n${line('rename-var', 'approved')}\n`);
+    const attention = attentionOf(await buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) }));
+    expect(attention).toContain('### Task reviews that did not run');
+    expect(attention).toContain('- **auth-login** (acme-api, feat/auth-login): NONE (task review did not run)');
+    expect(attention).not.toContain('rename-var');
+    expect(attention).not.toContain('Nothing flagged');
+    const clean = attentionOf(await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) }));
+    expect(clean).not.toContain('Task reviews that did not run');
+  });
+
   it('flags a missing FINAL_REVIEW.md', async () => {
     const attention = attentionOf(await withReview(null));
     expect(attention).toContain('### Final review');

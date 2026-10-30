@@ -33,6 +33,8 @@ The orchestrator may ask you for any of the reviews below. Be specific and cite 
    - No weakened, skipped or deleted tests. No new dependency, migration or contract change without a logged approval.
    - The repo's `CONSTRAINTS.md`, if it has one, is met: each threshold is an acceptance criterion, and an unmet one is at
      least a MAJOR finding.
+   - You may be handed deep tasks whose task review did not run, with their review focus. Review each of them in that
+     focus, as in the task review below.
    - BLOCKED and skipped tasks have a reason. Anything uncertain is listed for the human.
    - Report each SPEC success criterion as `met` (name the test or command and its exit code), `unmet`, or `manual` (a
      `manual:` row of the plan's Verification matrix, or a criterion you could not verify), in a `Criteria:` block.

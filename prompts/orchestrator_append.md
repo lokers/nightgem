@@ -40,7 +40,10 @@ Without approval, do not do it.
 - If the task still fails after attempt 3: mark it `blocked` with `blockedReason`, mark every dependent `skipped`, and
   **keep independent lanes going**. Never stall the whole run on one task.
 - A task is `done` only with evidence: a diff on its branch plus every verify command at exit 0. A `Review: deep` task also
-  needs its @oracle task review, with no BLOCKER or MAJOR finding open, before it is merged.
+  needs its @oracle task review, with no BLOCKER or MAJOR finding open, before it is merged. If that review returns no
+  verdict after one retry, the task is still merged but marked `oracleVerdict: "NONE (task review did not run)"` and
+  logged as a Decision with `needsHumanAttention: true`; the final review reviews it. A risky change that @oracle has not
+  approved still blocks, deep or not.
 
 ## Worktrees and branches
 
@@ -166,7 +169,8 @@ Every verdict you get is quoted into a Decision or `oracleVerdict`.
 ask once more. If the second try also gives no verdict, log a Decision with `needsHumanAttention: true` that says which
 review did not run. Never substitute your own review for @oracle's, and never read a missing verdict as approval: a risky
 change without a verdict is not approved, and a final review without one is saved as `VERDICT: NONE` at the top of
-`FINAL_REVIEW.md`.
+`FINAL_REVIEW.md`. The one exception to holding work back is a `Review: deep` task whose task review did not run: it is merged
+with `oracleVerdict: "NONE (task review did not run)"`, and the final review is handed it.
 
 ## Budget awareness
 

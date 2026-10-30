@@ -591,6 +591,23 @@ describe('review levels and the repo quality bar (#12)', () => {
     expect(out).toMatch(/no verdict/);
   });
 
+  it('a deep task whose review did not run is still merged, but marked, handed to the final review, and a risky change still blocks', () => {
+    const NONE = 'oracleVerdict: "NONE (task review did not run)"';
+    const build = render('phase-build');
+    expect(build).toContain(NONE);
+    expect(build).toMatch(/carry on and merge/);
+    expect(build).toMatch(/unless it is also a risky change[\s\S]{0,120}step 8[\s\S]{0,120}stays BLOCKED/);
+    const orch = render('orchestrator_append');
+    expect(orch).toContain(NONE);
+    expect(orch).toMatch(/risky change[\s\S]{0,80}still (?:blocks|BLOCKED)/i);
+    for (const name of ['phase-review', 'phase-review-lite'] as const) {
+      const out = render(name);
+      expect(out, name).toMatch(/deep tasks? whose task review did not run/);
+      expect(out, name).toContain('oracleVerdict');
+    }
+    expect(render('oracle_append')).toMatch(/deep tasks? whose task review did not run/);
+  });
+
   it('orchestrator_append lists the task review as a mandatory @oracle moment and passes the focus and CONSTRAINTS.md on', () => {
     const out = render('orchestrator_append');
     const moments = out.slice(out.indexOf('## Mandatory @oracle moments'), out.indexOf('## Budget awareness'));

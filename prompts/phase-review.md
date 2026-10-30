@@ -9,7 +9,8 @@ No human is present. Do not ask questions. Decide and log.
    an `origin/<branch>` ref.
 3. Ask @oracle for the final review of all integration branches against the SPEC success criteria. Give it the repo paths,
    branch names, the diffs (`git diff <base>...<branch>`), the verify results, `{{decisionsMd}}` and the Verification matrix
-   in `{{planMd}}`. It reports each criterion as met, unmet or manual, and checks the repo's `CONSTRAINTS.md` if it has one.
+   in `{{planMd}}`, plus the list of deep tasks whose task review did not run (their latest TaskEvent has an `oracleVerdict`
+   starting with `NONE`) with their review focus, which it must review. It reports each criterion as met, unmet or manual, and checks the repo's `CONSTRAINTS.md` if it has one.
    **Fail closed.** If @oracle returns no verdict (an error, a timeout, an empty answer or one without a verdict), ask once
    more. If the second try also gives no verdict, log a Decision of kind `other` with `needsHumanAttention: true` that says
    the final review did not run. Never substitute your own review for @oracle's, and never read a missing verdict as approval.
