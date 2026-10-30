@@ -39,6 +39,7 @@ Then, in the OpenCode TUI or OpenCode.app:
 2. Pick the budget (25 / 50 / 100 / custom USD) and choose **launch now**. The command runs `doctor`, then `launch`. Fix any hard failure first (plug in AC power).
 3. Close the TUI. Keep the Mac on AC power. Check in with `/nightgem-status <slug>`; stop with `/nightgem-stop <slug>`.
 4. In the morning read `<workspaceRoot>/.specs/<slug>/REPORT.md`, then review the branches in `<repo>/.worktrees/<slug>`. Pushing and PRs are yours.
+5. Optional: `/nightgem-retro <slug>` reads the finished run, groups its friction into findings and proposes changes to your profile and instructions file (each applied only when you approve it). See [Retrospective](docs/how-it-works.md#retrospective).
 
 `install` writes `~/.config/opencode/commands/nightgem*.md` and, if you have none, a starter `~/.config/nightgem/profile.jsonc`. It never touches an existing profile. `uninstall` removes only the commands it installed and you did not edit. To remove the PATH link as well, run `npm unlink -g nightgem`.
 

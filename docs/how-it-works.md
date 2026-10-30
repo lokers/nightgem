@@ -142,6 +142,15 @@ The never-list forbids weakening, skipping or deleting tests, and @oracle is ask
 
 A branch with hits gets ⚠️ and a pointer under "Needs human attention". The check is a heuristic that informs you: it never fails the run, a diff that cannot be read is shown as "not scanned", and a deliberate, justified suppression shows up too, so read each hit before you act on it.
 
+## Retrospective
+
+`/nightgem-retro <slug>` is an interactive slash command for a run that has ended. It reads the run's artifacts read-only (`REPORT.md`, `DECISIONS.md`, `tasks.jsonl`, `FINAL_REVIEW.md`, `MANUAL_CHECKS.md` and the run events), groups the friction (guard denials, retried or blocked tasks, escalations, wind-downs, review findings, flagged suppressions) into findings with their evidence, and classifies each by where the fix belongs: your **profile**, your **instructions file**, a **repo's own docs**, or **nightgem** itself. It uses the `reflect` skill when one is available.
+
+- A fix for the profile or the instructions file is shown as a diff and applied only after you approve it (a profile edit is checked with `profile validate` and undone if it fails).
+- Suggested text for a repo's docs is written down, not applied.
+- For nightgem itself it drafts an issue text and never files it; it never edits the nightgem checkout.
+- It writes `RETRO.md` into the run's specs directory. It never stops, resumes or changes the run. `install` installs the command with the others (re-run it to get it).
+
 ## Desktop app (OpenCode.app)
 
 - **Launching works from the app.** `/nightgem` is a normal global command. The run always gets its own detached server, never the app's embedded one, so closing the app does not stop it.

@@ -23,7 +23,7 @@ import {
   type ProfileFs,
 } from './userprofile.ts';
 
-export const COMMAND_NAMES = [COMMANDS.main, COMMANDS.status, COMMANDS.stop] as const;
+export const COMMAND_NAMES = [COMMANDS.main, COMMANDS.status, COMMANDS.stop, COMMANDS.retro] as const;
 export type CommandName = (typeof COMMAND_NAMES)[number];
 
 export const MARKER_PREFIX = `<!-- ${MARKER} sha256=`;
@@ -165,7 +165,7 @@ function renderStarter(starter: string, workspaceRoot: string): string {
 }
 
 /**
- * Install the three commands (and the starter profile if none exists).
+ * Install the slash commands (`COMMAND_NAMES`) (and the starter profile if none exists).
  *
  * Nothing is written until every check passed: a conflict (an unmanaged or hand-edited file at a command's name, without
  * `force`), a missing or invalid `workspace`, or a bad template aborts the whole install.

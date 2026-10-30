@@ -79,7 +79,7 @@ beforeEach(() => {
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
 describe('installCommands', () => {
-  it('fresh install writes the 3 commands and the profile', () => {
+  it('fresh install writes the 4 commands and the profile', () => {
     const r = installCommands(input());
     expect(r.commands.map((c) => [c.name, c.action])).toEqual(COMMAND_NAMES.map((n) => [n, 'created']));
     for (const n of COMMAND_NAMES) expect(statSync(join(commandsDir, `${n}.md`)).isFile()).toBe(true);
@@ -104,7 +104,7 @@ describe('installCommands', () => {
     const tpl = join(templatesDir, 'nightgem-stop.md');
     writeFileSync(tpl, `${readFileSync(tpl, 'utf8')}\nAn extra rule.\n`);
     const r = installCommands(input({ workspace: undefined }));
-    expect(r.commands.map((c) => c.action)).toEqual(['unchanged', 'unchanged', 'updated']);
+    expect(r.commands.map((c) => c.action)).toEqual(['unchanged', 'unchanged', 'updated', 'unchanged']);
     const text = readFileSync(join(commandsDir, 'nightgem-stop.md'), 'utf8');
     expect(text).toContain('An extra rule.');
     expect(inspectManaged(text).kind).toBe('intact');
@@ -217,6 +217,41 @@ describe('installCommands', () => {
   });
 });
 
+describe('the retro command (#15)', () => {
+  it('is one of the installed command names, and every template in commands/ is installed', () => {
+    expect(COMMAND_NAMES).toContain('nightgem-retro');
+    const templates = fs.readdirSync(join(REPO, 'commands')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3));
+    expect([...COMMAND_NAMES].sort()).toEqual(templates.sort());
+  });
+
+  it('is installed with the marker and the absolute node and bin paths', () => {
+    installCommands(input());
+    const text = readFileSync(join(commandsDir, 'nightgem-retro.md'), 'utf8');
+    expect(inspectManaged(text).kind).toBe('intact');
+    expect(text).toContain(`${NODE} ${BIN} profile show --json`);
+    expect(text).not.toMatch(/\{\{/);
+  });
+
+  it('install leaves a hand-edited retro command alone without --force, and uninstall skips it', () => {
+    installCommands(input());
+    const target = join(commandsDir, 'nightgem-retro.md');
+    writeFileSync(target, `${readFileSync(target, 'utf8')}\nmy edit\n`);
+    expect(() => installCommands(input({ workspace: undefined }))).toThrow(/edited since install/);
+    const before = sha(target);
+    const r = uninstallCommands({ home, fs, commandsDir });
+    expect(r.commands.find((c) => c.name === 'nightgem-retro')?.action).toBe('skipped-edited');
+    expect(sha(target)).toBe(before);
+  });
+
+  it('uninstall removes an intact retro command and never an unmanaged file of that name', () => {
+    installCommands(input());
+    expect(uninstallCommands({ home, fs, commandsDir }).commands.find((c) => c.name === 'nightgem-retro')?.action).toBe('removed');
+    writeFileSync(join(commandsDir, 'nightgem-retro.md'), 'mine\n');
+    expect(uninstallCommands({ home, fs, commandsDir }).commands.find((c) => c.name === 'nightgem-retro')?.action).toBe('skipped-unmanaged');
+    expect(readFileSync(join(commandsDir, 'nightgem-retro.md'), 'utf8')).toBe('mine\n');
+  });
+});
+
 describe('uninstallCommands', () => {
   it('removes only intact managed files; edited and unmanaged ones and unrelated files keep their hashes', () => {
     installCommands(input());
@@ -233,6 +268,7 @@ describe('uninstallCommands', () => {
       ['nightgem', 'removed'],
       ['nightgem-status', 'skipped-edited'],
       ['nightgem-stop', 'skipped-unmanaged'],
+      ['nightgem-retro', 'removed'],
     ]);
     expect(fs.existsSync(join(commandsDir, 'nightgem.md'))).toBe(false);
     expect(keep.map(([f]) => sha(f as string))).toEqual(keep.map(([, h]) => h));
@@ -303,7 +339,7 @@ describe('install / uninstall CLI', () => {
 
     lines.length = 0;
     await program.parseAsync(['uninstall', '--commands-dir', commandsDir], { from: 'user' });
-    expect(lines.filter((l) => l.startsWith('removed'))).toHaveLength(3);
+    expect(lines.filter((l) => l.startsWith('removed'))).toHaveLength(4);
   });
 
   it('exits 1 with the reason when --workspace is missing', async () => {
@@ -319,6 +355,34 @@ describe('install / uninstall CLI', () => {
 
 describe('command templates', () => {
   const read = (n: string): string => readFileSync(join(REPO, 'commands', `${n}.md`), 'utf8');
+
+  it('the retro command is interactive and read-only on the run, and writes RETRO.md', () => {
+    const t = read('nightgem-retro');
+    for (const needle of [
+      'profile show --json',
+      ' status ',
+      '.specs/<slug>',
+      'REPORT.md',
+      'DECISIONS.md',
+      'tasks.jsonl',
+      'FINAL_REVIEW.md',
+      'MANUAL_CHECKS.md',
+      'events.jsonl',
+      '`reflect` skill',
+      '`question` tool',
+      'RETRO.md',
+      'instructionsFile',
+      'profile validate',
+      'acme-api',
+    ]) {
+      expect(t, needle).toContain(needle);
+    }
+    for (const target of ['profile', 'instructions file', "repo's own docs", 'nightgem']) expect(t, target).toContain(target);
+    expect(t).toMatch(/read-only/i);
+    expect(t).toMatch(/never (?:edit|touch|change)[^.]*nightgem checkout/i);
+    expect(t).toMatch(/never\s+file/i);
+    expect(t).toMatch(/Never push/i);
+  });
 
   it('have frontmatter at the top and only the NODE/BIN placeholders', () => {
     for (const n of COMMAND_NAMES) {
