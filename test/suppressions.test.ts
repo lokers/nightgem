@@ -155,6 +155,25 @@ describe('scanDiff: tests that were deleted or lost assertions', () => {
     expect(scanDiff(diff)).toEqual([{ kind: 'deleted-test', file: 'src/a.test.ts' }]);
   });
 
+  it('reads the name of a deleted file from the --- line, decoding git-quoted names', () => {
+    const diff = [
+      'diff --git "a/caf\\303\\251_test.go" "b/caf\\303\\251_test.go"',
+      'deleted file mode 100644',
+      'index 1111111..0000000',
+      '--- "a/caf\\303\\251_test.go"',
+      '+++ /dev/null',
+      '@@ -1 +0,0 @@',
+      '-assert.Equal(t, 1, a())',
+      '',
+    ].join('\n');
+    expect(scanDiff(diff)).toEqual([{ kind: 'deleted-test', file: 'café_test.go' }]);
+  });
+
+  it('reads a quoted name from the header alone when an empty file is deleted', () => {
+    const diff = ['diff --git "a/caf\\303\\251_test.go" "b/caf\\303\\251_test.go"', 'deleted file mode 100644', 'index 1111111..0000000', ''].join('\n');
+    expect(scanDiff(diff)).toEqual([{ kind: 'deleted-test', file: 'café_test.go' }]);
+  });
+
   it('flags a deleted empty test file (no hunk, no header lines)', () => {
     const diff = ['diff --git a/pkg/a_test.go b/pkg/a_test.go', 'deleted file mode 100644', 'index 1111111..0000000', ''].join('\n');
     expect(scanDiff(diff)).toEqual([{ kind: 'deleted-test', file: 'pkg/a_test.go' }]);
@@ -192,6 +211,23 @@ describe('scanDiff: tests that were deleted or lost assertions', () => {
       '',
     ].join('\n');
     expect(scanDiff(diff)).toEqual([{ kind: 'assertion-loss', file: 'src/b.test.ts', removed: 1, added: 0 }]);
+  });
+});
+
+describe('scanDiff: the repo quality bar', () => {
+  it('flags any change to a file named CONSTRAINTS.md: edited, added, deleted or renamed away', () => {
+    expect(scanDiff(modified('CONSTRAINTS.md', { added: ['coverage >= 10'], removed: ['coverage >= 80'] }))).toEqual([
+      { kind: 'constraints-changed', file: 'CONSTRAINTS.md' },
+    ]);
+    expect(scanDiff(modified('acme-api/docs/CONSTRAINTS.md', { added: ['x'] }))).toEqual([{ kind: 'constraints-changed', file: 'acme-api/docs/CONSTRAINTS.md' }]);
+    expect(scanDiff(deleted('CONSTRAINTS.md', ['coverage >= 80']))).toEqual([{ kind: 'constraints-changed', file: 'CONSTRAINTS.md' }]);
+    const renamed = ['diff --git a/CONSTRAINTS.md b/docs/quality.md', 'similarity index 90%', 'rename from CONSTRAINTS.md', 'rename to docs/quality.md', ''].join('\n');
+    expect(scanDiff(renamed)).toEqual([{ kind: 'constraints-changed', file: 'CONSTRAINTS.md' }]);
+  });
+
+  it('does not flag look-alike names', () => {
+    expect(scanDiff(modified('docs/MY-CONSTRAINTS.md.bak', { added: ['x'] }))).toEqual([]);
+    expect(scanDiff(modified('src/constraints.ts', { added: ['x'] }))).toEqual([]);
   });
 });
 

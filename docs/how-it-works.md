@@ -138,9 +138,10 @@ Runs have no browser or dev server, on purpose, so some success criteria can onl
 The never-list forbids weakening, skipping or deleting tests, and @oracle is asked to check it. `REPORT.md` also checks it without a model: under `## Safety checks`, `### Suppressions and skipped tests` scans `git diff -U0 <base>...HEAD` of each integration branch (the base is `origin/<default>` when that ref exists, else the local default) and lists, with file and line:
 
 - **added** suppressions and skips: `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `.skip(`, `.only(`, `xit(`, `xdescribe(`, `t.Skip(`, `//nolint`, `# noqa`, `# type: ignore`, `@Disabled`, `@Ignore`, `pytest.mark.skip` (documentation files such as `.md` are not scanned);
-- **deleted test files**, and test files with a **net loss of assertions** (`expect(` or `assert…` lines removed minus added).
+- **deleted test files**, and test files with a **net loss of assertions** (`expect(` or `assert…` lines removed minus added);
+- any **change to a file named `CONSTRAINTS.md`** (a repo's written quality bar, see [Review levels](#review-levels-and-the-quality-bar)): the prompts tell agents never to edit it, and this catches it if one does. Add `**/CONSTRAINTS.md` to [`deny.editPaths`](profile.md#fields) to make that a rule the guard enforces.
 
-A branch with hits gets ⚠️ and a pointer under "Needs human attention". The check is a heuristic that informs you: it never fails the run, a diff that cannot be read is shown as "not scanned", and a deliberate, justified suppression shows up too, so read each hit before you act on it.
+A branch with hits gets ⚠️ and a pointer under "Needs human attention". The check is a heuristic that informs you: it never fails the run, a deliberate, justified suppression shows up too, so read each hit before you act on it. A diff that cannot be read is shown as "not scanned" and also listed under "Needs human attention". The diff is read with fixed options (`--text`, fixed `a/` and `b/` prefixes, `--end-of-options`), so a repo's own git config or attributes cannot hide a file from it.
 
 ## Retrospective
 

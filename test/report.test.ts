@@ -10,6 +10,7 @@ import {
   checkRemoteBranch,
   commitsBetween,
   currentBranch,
+  diffBetween,
   headSha,
   porcelainHash,
   remoteHasBranch,
@@ -161,7 +162,19 @@ describe('gitinfo', () => {
   it('commitsBetween splits git log --oneline output and passes the range', async () => {
     const git = fakeGit({ '/wt': { log: { master: ['aaa one', 'bbb two'] } } });
     expect(await commitsBetween('/wt', 'master', git)).toEqual(['aaa one', 'bbb two']);
-    expect(git.calls).toEqual(['/wt :: log --oneline master..HEAD']);
+    expect(git.calls).toEqual(['/wt :: log --oneline --end-of-options master..HEAD']);
+  });
+
+  it('commitsBetween ends the options before the range, so a ref can never be read as an option', async () => {
+    const git = fakeGit({ '/wt': { log: { '--output=/x': [] } } });
+    await commitsBetween('/wt', '--output=/x', git);
+    expect(git.calls).toEqual(['/wt :: log --oneline --end-of-options --output=/x..HEAD']);
+  });
+
+  it('diffBetween ignores the repo config that could blind the scan and ends the options before the range', async () => {
+    const git = fakeGit({ '/wt': { diff: { '--output=/x': '' } } });
+    await diffBetween('/wt', '--output=/x', git);
+    expect(git.calls).toEqual(['/wt :: diff -U0 -M --no-color --text --src-prefix=a/ --dst-prefix=b/ --end-of-options --output=/x...HEAD']);
   });
 
   it('commitsBetween returns [] for empty output', async () => {
@@ -719,6 +732,15 @@ describe('buildReport: suppressions and skipped tests', () => {
     expect(md).not.toContain('❌');
   });
 
+  it('lists a changed CONSTRAINTS.md as a hit', async () => {
+    const repos = cleanRepos();
+    const patch = ['diff --git a/CONSTRAINTS.md b/CONSTRAINTS.md', '--- a/CONSTRAINTS.md', '+++ b/CONSTRAINTS.md', '@@ -1 +1 @@', '-coverage >= 80', '+coverage >= 10', ''].join('\n');
+    repos[INT_WT] = { ...repos[INT_WT], diff: { master: patch } };
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
+    expect(safetyOf(md)).toContain('  - `CONSTRAINTS.md`: quality bar file changed (agents must not edit it)');
+    expect(attentionOf(md)).toContain('1 hit(s)');
+  });
+
   it('diffs against origin/<default> when that ref exists, and caps a long list', async () => {
     const repos = cleanRepos();
     repos[ACME_API] = { ...repos[ACME_API], originRefs: ['master'] };
@@ -738,14 +760,19 @@ describe('buildReport: suppressions and skipped tests', () => {
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
     expect(safetyOf(md)).toContain("- ⚠️ acme-api `feat/demo-feature-integration`: not scanned (fatal: bad revision 'master...HEAD')");
     expect(safetyOf(md)).not.toContain('none found');
-    expect(attentionOf(md)).not.toContain('Suppressions');
+    const attention = attentionOf(md);
+    expect(attention).toContain('### Suppressions and skipped tests');
+    expect(attention).toContain("- acme-api `feat/demo-feature-integration`: not scanned (fatal: bad revision 'master...HEAD'). Check the diff by hand.");
+    expect(attention).not.toContain('Nothing flagged');
   });
 
   it('is read-only: the scan only runs git diff in the integration worktree', async () => {
     const git = fakeGit(cleanRepos());
     await buildReport({ paths: fixture('completed'), git });
     const diffs = git.calls.filter((c) => c.includes(' :: diff '));
-    expect(diffs).toEqual([`${INT_WT} :: diff -U0 -M --no-color master...HEAD`]);
+    expect(diffs).toEqual([
+      `${INT_WT} :: diff -U0 -M --no-color --text --src-prefix=a/ --dst-prefix=b/ --end-of-options master...HEAD`,
+    ]);
   });
 });
 

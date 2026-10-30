@@ -31,15 +31,17 @@ function lines(out: string): string[] {
 
 /** `git log --oneline <base>..HEAD` as one string per commit (newest first). */
 export async function commitsBetween(worktree: string, base: string, git: GitRunner = defaultGit): Promise<string[]> {
-  return lines(await git(['log', '--oneline', `${base}..HEAD`], { cwd: worktree }));
+  return lines(await git(['log', '--oneline', '--end-of-options', `${base}..HEAD`], { cwd: worktree }));
 }
 
 /**
  * The patch of `<base>...HEAD` with no context lines (`-U0`), as the suppression scan reads it. Renames are detected
- * explicitly so a moved test file is not read as a deleted one. Throws on a git failure.
+ * explicitly so a moved test file is not read as a deleted one. `--text`, `--src-prefix` and `--dst-prefix` keep a repo's
+ * own config and attributes (`diff.noprefix`, `*.ts -diff`) from blinding the scan, and `--end-of-options` makes sure a ref
+ * that starts with `-` is never read as an option (`--output=<file>` would write a file). Throws on a git failure.
  */
 export async function diffBetween(worktree: string, base: string, git: GitRunner = defaultGit): Promise<string> {
-  return git(['diff', '-U0', '-M', '--no-color', `${base}...HEAD`], { cwd: worktree });
+  return git(['diff', '-U0', '-M', '--no-color', '--text', '--src-prefix=a/', '--dst-prefix=b/', '--end-of-options', `${base}...HEAD`], { cwd: worktree });
 }
 
 /** Current branch name (`HEAD` when detached). */

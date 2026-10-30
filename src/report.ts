@@ -608,9 +608,10 @@ function attentionSection(ctx: Ctx): string[] {
   const blocked = [...ctx.tasks, ...ctx.integrations.values()].filter((t) => t.state === 'blocked');
   const unverified = ctx.pushChecks.filter((c) => c.state === 'unknown' || c.state === 'no-repo');
   const withHits = ctx.suppressionScans.filter((s) => s.hits !== null && s.hits.length > 0);
+  const unscanned = ctx.suppressionScans.filter((s) => s.hits === null);
   // without a RUN.json nothing is known about what ran, so a missing review is not news
   const review = ctx.manifest ? finalReviewVerdict(ctx.finalReviewText) : ({ ok: true } as const);
-  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0 && review.ok) {
+  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0 && unscanned.length === 0 && review.ok) {
     out.push('Nothing flagged.');
     return out;
   }
@@ -642,10 +643,11 @@ function attentionSection(ctx: Ctx): string[] {
     }
     out.push('');
   }
-  if (withHits.length > 0) {
+  if (withHits.length > 0 || unscanned.length > 0) {
     out.push('### Suppressions and skipped tests', '');
     out.push('Check these before trusting that the tests prove the change (details under "Safety checks"):', '');
     for (const s of withHits) out.push(`- ${s.repo} ${code(s.branch)}: ${s.hits?.length ?? 0} hit(s)`);
+    for (const s of unscanned) out.push(`- ${s.repo} ${code(s.branch)}: not scanned (${s.reason ?? 'could not read the diff'}). Check the diff by hand.`);
     out.push('');
   }
   if (defects.length > 0) {
@@ -793,6 +795,8 @@ function hitLine(h: SuppressionHit): string {
       return `- ${code(h.file)}: test file deleted`;
     case 'assertion-loss':
       return `- ${code(h.file)}: net loss of assertions (${h.removed} removed, ${h.added} added)`;
+    case 'constraints-changed':
+      return `- ${code(h.file)}: quality bar file changed (agents must not edit it)`;
   }
 }
 
