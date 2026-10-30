@@ -153,6 +153,7 @@ allow|edit|{{WORKSPACE}}/.specs/{{SLUG}}/STATUS.md
 allow|edit|{{WORKSPACE}}/.specs/{{SLUG}}/DECISIONS.md
 allow|edit|{{WORKSPACE}}/.specs/{{SLUG}}/REPORT.md
 allow|edit|{{WORKSPACE}}/.specs/{{SLUG}}/FINAL_REVIEW.md
+allow|edit|{{WORKSPACE}}/.specs/{{SLUG}}/MANUAL_CHECKS.md
 allow|edit|{{TMP}}/x
 # agent-writable run files: opencode hands the rule `tasks.jsonl` (relative to the serve cwd .run), not the absolute path
 allow|edit|tasks.jsonl

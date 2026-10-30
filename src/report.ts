@@ -47,6 +47,8 @@ const WIND_DOWN_PREFIX = 'wind-down:';
 /** The stop reason of a resume that was rolled back before it ran (see `resume`). */
 const RESUME_FAILED = 'resume-failed';
 export const FINAL_REVIEW_FILE = 'FINAL_REVIEW.md';
+/** The checklist the review phase writes into the specs dir: what a human has to verify by hand. */
+export const MANUAL_CHECKS_FILE = 'MANUAL_CHECKS.md';
 
 export interface BuildReportInput {
   paths: RunPaths;
@@ -222,6 +224,8 @@ interface Ctx {
   integrations: Map<string, TaskEventT>; // repo name -> latest integration event
   phaseEvents: TaskEventT[]; // every `phase:<name>` marker event, in file order
   finalReviewPath: string | null; // set when <specsDir>/FINAL_REVIEW.md exists
+  /** `<specsDir>/MANUAL_CHECKS.md` and its text; `text` is null when the file does not exist. */
+  manualChecks: { path: string; text: string | null };
   /** Review files renamed with an `-attempt<n>` suffix by a resume, in attempt order. */
   earlierReviews: EarlierReview[];
   decisions: DecisionT[];
@@ -502,6 +506,48 @@ async function integrationSection(ctx: Ctx): Promise<string[]> {
   return out;
 }
 
+/**
+ * The checklist items of MANUAL_CHECKS.md: every `- [ ]` / `- [x]` (or `*`) line, with the indented lines that follow it
+ * (the steps), verbatim. Other lines (title, prose) are not copied.
+ */
+export function extractManualChecks(markdown: string): string[] {
+  const out: string[] = [];
+  let inItem = false;
+  for (const line of markdown.split('\n')) {
+    if (/^\s*[-*] \[[ xX]\]/.test(line)) {
+      out.push(line.trimEnd());
+      inItem = true;
+    } else if (inItem && /^\s+\S/.test(line)) {
+      out.push(line.trimEnd());
+    } else {
+      inItem = false;
+    }
+  }
+  return out;
+}
+
+function verifyByHandSection(ctx: Ctx): string[] {
+  const out: string[] = ['## Verify by hand', ''];
+  const { path, text } = ctx.manualChecks;
+  if (text === null) {
+    out.push('None listed.', '', `> \`${MANUAL_CHECKS_FILE}\` was not found: the review phase did not write it, so checks that need a human may be missing.`);
+    return out;
+  }
+  const items = extractManualChecks(text);
+  if (items.length > 0) {
+    out.push(`From [${MANUAL_CHECKS_FILE}](${path}). Runs have no browser or dev server, so these were not checked:`, '', ...items);
+    return out;
+  }
+  const body = text
+    .split('\n')
+    .filter((l) => l.trim() !== '' && !/^#{1,6}\s/.test(l))
+    .join('\n')
+    .trim();
+  if (body === '' || /^none\.?$/i.test(body)) out.push('None listed.');
+  else out.push(`⚠ [${MANUAL_CHECKS_FILE}](${path}) has content but no \`- [ ]\` items. Read it by hand.`);
+  return out;
+}
+
 function attentionSection(ctx: Ctx): string[] {
   const out: string[] = ['## Needs human attention', ''];
   const flagged = ctx.decisions.filter((d) => d.needsHumanAttention);
@@ -779,12 +825,15 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
     () => null,
   );
 
+  const manualChecksPath = join(paths.specsDir, MANUAL_CHECKS_FILE);
+
   const ctx: Ctx = {
     manifest,
     tasks,
     integrations,
     phaseEvents,
     finalReviewPath,
+    manualChecks: { path: manualChecksPath, text: await readText(manualChecksPath) },
     earlierReviews: await readEarlierReviews(paths.specsDir, paths.runDir),
     decisions: latestBy(decisionsRead.items, (d) => d.id),
     costs: costRead.items,
@@ -805,6 +854,7 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
     await tasksSection(ctx),
     await integrationSection(ctx),
     attentionSection(ctx),
+    verifyByHandSection(ctx),
     await safetySection(ctx),
     [NARRATIVE_HEADING, '', narrative ?? NARRATIVE_PLACEHOLDER],
     await nextStepsSection(ctx),

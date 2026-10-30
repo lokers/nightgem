@@ -7,6 +7,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Plans trace each SPEC success criterion to evidence: `PLAN.md` gets a `## Verification matrix` (task(s) and the proving test or command, or `manual:` steps) and @oracle's plan review answers `REVISE` if a criterion is missing. The review phases write `MANUAL_CHECKS.md`, a checklist of what to verify by hand, the final review reports each criterion as met, unmet or manual, and `REPORT.md` gets a deterministic `## Verify by hand` section (#13)
 - `REPORT.md` flags added suppressions and skipped tests, deleted test files and test files with fewer assertions, found in the diff of each integration branch, under a new `### Suppressions and skipped tests` check in "Safety checks" and a pointer in "Needs human attention". It is a deterministic heuristic and never fails the run (#14)
 
 ## [0.2.0] - 2026-10-24

@@ -17,7 +17,7 @@ The [README](../README.md#how-it-works) has the short version (the gem-factory n
         build  -> worktrees, deps, parallel lanes,       (root session 2)
                   per-task verify, fix-ups (max 3)
         review -> integration branch verification,       (root session 3)
-                  oracle final review
+                  oracle final review, MANUAL_CHECKS.md
         report -> deterministic REPORT.md (no LLM)
 ```
 
@@ -90,10 +90,11 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | Path | Purpose |
 |---|---|
 | `SPEC.md` | The approved spec (read-only for agents) |
-| `PLAN.md` | Plan written in the plan phase, reviewed by @oracle |
+| `PLAN.md` | Plan written in the plan phase, reviewed by @oracle. Ends with a `## Verification matrix`: one row per SPEC success criterion, with its task(s) and the test or command that proves it, or `manual:` with exact steps. The plan review answers `REVISE` if a criterion is missing. |
 | `STATUS.md` | Live task table, updated on every state change |
 | `DECISIONS.md` | Every agent decision, with @oracle verdicts for risky ones |
 | `REPORT.md` | Final report: outcome, attempts of a resumed run, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. See [Suppressions and skipped tests](#suppressions-and-skipped-tests). |
+| `MANUAL_CHECKS.md` | Written by the review phase: a `- [ ]` checklist of what a human has to verify by hand (the `manual:` rows of the plan's Verification matrix, criteria reported `manual` or `unmet`, anything the review could not verify), or `None.`. `REPORT.md` copies it under `## Verify by hand`. After a resume it is overwritten by the new review. |
 | `FINAL_REVIEW.md` | The oracle's final review. After a resume the earlier ones are kept as `FINAL_REVIEW-attempt<n>.md` (and `.run/run-complete-attempt<n>.json`) |
 | `.run/RUN.json` | State, phase, cost total, attempts, session ids, PID, port, server URL, profile and skills summary (zod-validated) |
 | `.run/cost.jsonl` | Cost ledger lines (`session-info` or `estimate`) |
@@ -105,6 +106,14 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `~/Library/Application Support/nightgem/<slug>/` | Password file, heartbeat, control flags, `run-context.json`, launchd plist and logs (0700) |
 | `~/Library/Application Support/nightgem/<slug>/xdg-data/` | The run's own OpenCode database (isolated `XDG_DATA_HOME`) |
 | `<repo>/.worktrees/<slug>/<task>` and `/_integration` | Task and integration worktrees on local branches |
+
+## Verification matrix and checks by hand
+
+Runs have no browser or dev server, on purpose, so some success criteria can only be checked by a person. The run keeps track of them instead of letting them fall through:
+
+1. **Plan.** `PLAN.md` ends with a `## Verification matrix`: one row per success criterion in `SPEC.md`, naming the task(s) that deliver it and either the test or command that proves it or `manual:` followed by exact steps. @oracle's plan review answers `REVISE` when a criterion has no row or a row has no proof.
+2. **Review.** @oracle's final review reports each criterion as `met`, `unmet` or `manual`. The review phase (and the soft-stop review-lite) then writes `MANUAL_CHECKS.md` in the specs dir: a `- [ ]` checklist of the `manual:` rows, the criteria reported `manual` or `unmet`, and anything the review could not verify.
+3. **Report.** `REPORT.md` copies the checklist under `## Verify by hand`, or says `None listed.`. A missing `MANUAL_CHECKS.md` is noted, since a run that ended early may not have written it.
 
 ## Suppressions and skipped tests
 

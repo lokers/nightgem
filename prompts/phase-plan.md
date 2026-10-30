@@ -12,17 +12,31 @@ No human is present. Do not ask questions. Decide and log.
    - an estimate under about 45 minutes. Split larger work;
    - project-scoped verify commands for the task lane (`npx nx run <proj>:test`, `go test ./pkg/...`). The full suite runs
      only in `_integration`.
-3. Also in PLAN.md: each repo's integration branch `<type>/<TICKET|slug>` and worktree
+3. Also in PLAN.md, a `## Verification matrix` with **one row per success criterion in `{{specMd}}`** (every item of its
+   success or acceptance criteria): the criterion, the task id(s) that deliver it, and the proof, which is either the exact
+   test or command that proves it or `manual:` followed by exact steps a human can follow. A criterion needs a `manual:` row
+   when no test or command can prove it (visual judgement, a real device or an external system): runs have no browser or dev
+   server, on purpose, so do not plan around one. No criterion may be left out, and no row may have an empty proof.
+
+   ```
+   ## Verification matrix
+
+   | Success criterion | Task(s) | Proof |
+   | --- | --- | --- |
+   | <criterion, as worded in the SPEC> | api-endpoint | `go test ./pkg/...` (TestCreate) |
+   | <criterion, as worded in the SPEC> | ui-page | manual: open the page, click Save, expect the toast |
+   ```
+4. Also in PLAN.md: each repo's integration branch `<type>/<TICKET|slug>` and worktree
    `<repo>/.worktrees/{{slug}}/_integration`, the cross-repo order (from the workspace instructions in your system
    instructions, else by dependency), which tasks run in parallel, and a
    "Risky changes" list (new dependency, migration, API contract change) with the reason each is unavoidable.
-4. Ask @oracle for a mandatory plan review. Revise PLAN.md for every required change. At most 2 review rounds.
+5. Ask @oracle for a mandatory plan review. It also checks the Verification matrix against the SPEC and answers REVISE if a criterion is missing. Revise PLAN.md for every required change. At most 2 review rounds.
    If @oracle still answers REVISE after round 2, proceed with your best plan and log a Decision with `needsHumanAttention: true`.
-5. Append a `plan` Decision to `{{decisionsJsonl}}`, mirror it to `{{decisionsMd}}`, with the oracle verdict in `oracleApproved`.
+6. Append a `plan` Decision to `{{decisionsJsonl}}`, mirror it to `{{decisionsMd}}`, with the oracle verdict in `oracleApproved`.
    Log other choices (resolved spec gaps, base-branch notes, risky changes) as Decisions too.
-6. Write the task board to `{{statusMd}}` with every task `todo`, and append a `todo` TaskEvent per task to `{{tasksJsonl}}`
+7. Write the task board to `{{statusMd}}` with every task `todo`, and append a `todo` TaskEvent per task to `{{tasksJsonl}}`
    (`phase: "plan"`, `attempt: 0`, the planned branch and worktree path).
-7. On a resumed run, `{{planMd}}` and some TaskEvents may already exist from an interrupted plan phase: read them and finish the
+8. On a resumed run, `{{planMd}}` and some TaskEvents may already exist from an interrupted plan phase: read them and finish the
    plan instead of starting over, and do not append duplicate `todo` events for tasks that are already logged.
    Append the phase-done TaskEvent for `phase:plan`, then stop. Do not create worktrees or dispatch implementation.
 

@@ -17,7 +17,7 @@ import {
   type GitRunner,
 } from '../src/gitinfo.ts';
 import type { RunPaths } from '../src/paths.ts';
-import { NARRATIVE_PLACEHOLDER, buildReport, extractNarrative, writeReport } from '../src/report.ts';
+import { NARRATIVE_PLACEHOLDER, buildReport, extractManualChecks, extractNarrative, writeReport } from '../src/report.ts';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/report/', import.meta.url));
 const EMPTY_SHA256 = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
@@ -221,6 +221,7 @@ describe('buildReport: completed run', () => {
       'Tasks',
       'Integration branches',
       'Needs human attention',
+      'Verify by hand',
       'Safety checks',
       'Narrative',
       'Next steps',
@@ -280,7 +281,7 @@ describe('buildReport: completed run', () => {
 
   it('needs human attention lists flagged decisions only', async () => {
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
-    const part = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+    const part = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
     expect(part).toContain('**D-2** (dependency, oracle: approved): Add dependency zod-to-openapi');
     expect(part).not.toContain('D-1');
     expect(part).not.toContain('BLOCKED');
@@ -448,7 +449,7 @@ describe('buildReport: budget-aborted run', () => {
     expect(row).toContain('Oracle rejected D5 decision D-1 (DB migration)');
     expect(row).toContain('| (none) |'); // no commits
 
-    const part = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+    const part = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
     expect(part).toContain('**D-1** (migration, oracle: REJECTED): Add column users.nickname');
     expect(part).toContain('### BLOCKED tasks');
     expect(part).toContain('- **api** (acme-api, feat/api-endpoint): Oracle rejected D5 decision D-1 (DB migration)');
@@ -459,7 +460,7 @@ describe('buildReport: budget-aborted run', () => {
   it('uses the placeholder narrative and still has every section', async () => {
     const md = await buildReport({ paths: fixture('aborted'), git: fakeGit(abortedRepos()) });
     expect(md).toContain(`## Narrative\n\n${NARRATIVE_PLACEHOLDER}\n`);
-    expect(sections(md)).toHaveLength(8);
+    expect(sections(md)).toHaveLength(9);
     expect(md).not.toContain('## Integration branches\n\n### ');
     expect(md).toContain('(no integration branches)');
   });
@@ -505,7 +506,7 @@ describe('buildReport: safety checks', () => {
     const repos = cleanRepos();
     repos[ACME_WEB] = { ...repos[ACME_WEB], lsRemoteError: 'Command timed out after 30000 milliseconds' };
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
-    const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+    const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
     expect(attention).toContain('### Unverified: nothing pushed');
     expect(attention).toContain('acme-web `feat/ui-page`: unknown (Command timed out after 30000 milliseconds)');
     expect(attention).not.toContain('Nothing flagged');
@@ -514,8 +515,64 @@ describe('buildReport: safety checks', () => {
 
   it('nothing pushed: when every branch is verified absent, nothing is added to Needs human attention', async () => {
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
-    const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+    const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
     expect(attention).not.toContain('Unverified');
+  });
+});
+
+// --- verify by hand ------------------------------------------------------------------
+
+describe('buildReport: verify by hand', () => {
+  const withManual = async (content: string | null): Promise<string> => {
+    const d = await tmp();
+    await cp(join(FIXTURES, 'completed'), d, { recursive: true });
+    if (content !== null) await writeFile(join(d, 'MANUAL_CHECKS.md'), content);
+    return buildReport({ paths: pathsFor(d), git: fakeGit(cleanRepos()) });
+  };
+  const part = (md: string): string => md.slice(md.indexOf('## Verify by hand'), md.indexOf('## Safety checks'));
+
+  it('lists the checklist items of MANUAL_CHECKS.md verbatim, with their indented steps', async () => {
+    const md = await withManual(
+      [
+        '# Manual checks',
+        '',
+        '- [ ] Saving a draft shows a toast',
+        '  1. Open /drafts',
+        '  2. Click Save',
+        '- [x] Export works for an empty list',
+        '',
+        'Some prose the report does not copy.',
+        '',
+      ].join('\n'),
+    );
+    const p = part(md);
+    expect(p).toContain('- [ ] Saving a draft shows a toast\n  1. Open /drafts\n  2. Click Save\n- [x] Export works for an empty list');
+    expect(p).not.toContain('Some prose');
+    expect(p).not.toContain('None listed.');
+    expect(p).toMatch(/MANUAL_CHECKS\.md\]\(.+MANUAL_CHECKS\.md\)/);
+  });
+
+  it('says "None listed." when the file says there is nothing to check', async () => {
+    for (const content of ['None.\n', '# Manual checks\n\nNone\n', '']) {
+      expect(part(await withManual(content)), JSON.stringify(content)).toContain('None listed.');
+    }
+  });
+
+  it('says "None listed." and that the file was not written when MANUAL_CHECKS.md is missing', async () => {
+    const p = part(await withManual(null));
+    expect(p).toContain('None listed.');
+    expect(p).toContain('MANUAL_CHECKS.md` was not found');
+  });
+
+  it('points at the file when it has content but no checklist items', async () => {
+    const p = part(await withManual('Please check the export by hand.\n'));
+    expect(p).not.toContain('None listed.');
+    expect(p).toContain('has content but no `- [ ]` items');
+  });
+
+  it('extractManualChecks keeps only checklist items and their continuation lines', () => {
+    expect(extractManualChecks('# T\n\n* [ ] a\n   detail\n\n- [X] b\nprose\n')).toEqual(['* [ ] a', '   detail', '- [X] b']);
+    expect(extractManualChecks('nothing here')).toEqual([]);
   });
 });
 
@@ -542,7 +599,7 @@ describe('buildReport: suppressions and skipped tests', () => {
     '-expect(b()).toBe(2);',
     '',
   ].join('\n');
-  const attentionOf = (md: string): string => md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+  const attentionOf = (md: string): string => md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Verify by hand'));
   const safetyOf = (md: string): string => md.slice(md.indexOf('### Suppressions and skipped tests'), md.indexOf('## Narrative'));
 
   it('a clean integration branch is listed as none found and adds nothing to Needs human attention', async () => {
@@ -683,7 +740,7 @@ describe('missing or empty artifacts', () => {
   it('an empty directory still yields a full report without throwing', async () => {
     const dir = await tmp();
     const md = await buildReport({ paths: pathsFor(dir), git: fakeGit({}) });
-    expect(sections(md)).toHaveLength(8);
+    expect(sections(md)).toHaveLength(9);
     expect(md).toContain('RUN.json not found');
     expect(md).toContain('- Final state: unknown');
     expect(md).toContain('(no tasks recorded)');

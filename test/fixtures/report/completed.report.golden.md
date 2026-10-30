@@ -65,6 +65,12 @@ Summary: 3 done
 - **D-2** (dependency, oracle: approved): Add dependency zod-to-openapi
   - Rationale: Needed for schema export
 
+## Verify by hand
+
+None listed.
+
+> `MANUAL_CHECKS.md` was not found: the review phase did not write it, so checks that need a human may be missing.
+
 ## Safety checks
 
 ### Nothing pushed

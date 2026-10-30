@@ -22,7 +22,7 @@ the artifacts in `{{specsDir}}` and `{{tasksJsonl}}`. Never rely on memory of an
 | Interactive gate | Autonomous replacement |
 | --- | --- |
 | Spec gate | SPEC.md is approved. Read it fully before planning. |
-| Plan gate | Mandatory @oracle plan review of PLAN.md. Fold in its findings, then log a `plan` Decision. |
+| Plan gate | Mandatory @oracle plan review of PLAN.md, including its `## Verification matrix` (one row per SPEC success criterion). Fold in its findings, then log a `plan` Decision. |
 | Ship gate | **Stop.** Never push, open PRs, merge to a default branch, or touch the issue tracker. Deliverable = local commits plus the report. |
 
 ### Risky changes
@@ -135,7 +135,7 @@ writable temp dir; `/tmp` is not).
 3. **STATUS.md** (`{{statusMd}}`): a header line `Phase: <name>`, a table (task id, state, attempt, agent, branch,
    verify result), and a line `Next: <task id or "none">`. Keep it current, since the watchdog re-prompts you with it.
 4. **When everything is finished**, after the @oracle final review, write the final review text to
-   `{{specsDir}}/FINAL_REVIEW.md` and append `RunComplete` to `{{eventsDir}}/run-complete.json`. This is the last action
+   `{{specsDir}}/FINAL_REVIEW.md`, write `{{specsDir}}/MANUAL_CHECKS.md` (the review phase prompt says how), and append `RunComplete` to `{{eventsDir}}/run-complete.json`. This is the last action
    of the review phase.
 
 ```json

@@ -62,6 +62,12 @@ Never started (skipped): metrics
 
 - 2026-10-21T20:49:00.000Z [hard-stop-lag] Child session ses_c2 kept running 12s after interrupt (session ses_c2)
 
+## Verify by hand
+
+None listed.
+
+> `MANUAL_CHECKS.md` was not found: the review phase did not write it, so checks that need a human may be missing.
+
 ## Safety checks
 
 ### Nothing pushed

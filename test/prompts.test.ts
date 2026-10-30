@@ -472,6 +472,41 @@ describe('resume notes (AD8, AD9)', () => {
   });
 });
 
+describe('verification matrix and manual checks (#13)', () => {
+  it('phase-plan requires a Verification matrix with a row per SPEC success criterion', () => {
+    const out = render('phase-plan');
+    expect(out).toContain('## Verification matrix');
+    expect(out).toMatch(/one row per (?:SPEC )?success criterion/i);
+    expect(out).toContain('manual:');
+    expect(out).toMatch(/no browser or dev\s+server/);
+  });
+
+  it('the oracle plan review answers REVISE when the matrix misses a criterion', () => {
+    const out = render('oracle_append');
+    expect(out).toContain('Verification matrix');
+    expect(out).toMatch(/REVISE[^\n]*(?:missing|no row|misses)|(?:missing|no row|misses)[^\n]*REVISE/);
+  });
+
+  it('the oracle final review reports each criterion as met, unmet or manual', () => {
+    const out = render('oracle_append');
+    expect(out).toMatch(/met\b[^\n]*unmet[^\n]*manual/);
+    expect(out).toContain('Criteria:');
+  });
+
+  it('both review prompts write MANUAL_CHECKS.md as a checklist in the specs dir', () => {
+    for (const name of ['phase-review', 'phase-review-lite'] as const) {
+      const out = render(name);
+      expect(out, name).toContain(`${VARS.specsDir}/MANUAL_CHECKS.md`);
+      expect(out, name).toContain('- [ ]');
+      expect(out, name).toMatch(/`manual:` row/);
+    }
+  });
+
+  it('the orchestrator append names the matrix in the plan gate', () => {
+    expect(render('orchestrator_append')).toContain('Verification matrix');
+  });
+});
+
 describe('JSON example lines parse with the contracts', () => {
   function jsonLines(text: string): unknown[] {
     const lines: unknown[] = [];

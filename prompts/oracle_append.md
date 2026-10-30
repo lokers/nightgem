@@ -9,6 +9,9 @@ The orchestrator may ask you for any of the reviews below. Be specific and cite 
 
 1. **Plan review.** Check `{{planMd}}` against `{{specMd}}`.
    - Every spec requirement and success criterion maps to a task.
+   - `{{planMd}}` has a `## Verification matrix` with one row per SPEC success criterion, each naming its task(s) and either
+     the test or command that proves it or `manual:` with exact steps. Answer `REVISE` if a criterion has no row, a row has
+     no proof, or a `manual:` row has no steps a human can follow.
    - Tasks are small (about 45 minutes), with disjoint file ownership and correct dependencies.
    - Cross-repo order is right, as the workspace instructions require (a producer of a contract or generated code comes before its consumers).
    - Every task has exact, runnable, non-interactive verify commands. Risky changes are flagged for approval.
@@ -26,6 +29,8 @@ The orchestrator may ask you for any of the reviews below. Be specific and cite 
    - No hand edits of generated files. They were regenerated with the repo's own generator.
    - No weakened, skipped or deleted tests. No new dependency, migration or contract change without a logged approval.
    - BLOCKED and skipped tasks have a reason. Anything uncertain is listed for the human.
+   - Report each SPEC success criterion as `met` (name the test or command and its exit code), `unmet`, or `manual` (a
+     `manual:` row of the plan's Verification matrix, or a criterion you could not verify), in a `Criteria:` block.
    Start with `VERDICT: APPROVE | APPROVE-WITH-FIXES | REJECT`, then findings as `BLOCKER`, `MAJOR` or `MINOR`, each with
    file, evidence and the fix. Mark what is a must-fix for the one fix-up round.
 
@@ -45,6 +50,8 @@ tests, security and maintainability, not only the checklist above. For a plan re
 ```
 Verdict: APPROVE | REVISE | REJECT | APPROVE-WITH-FIXES
 Rationale: ...
+Criteria (final review only):
+- <criterion>: met | unmet | manual - <evidence>
 Findings:
 - [BLOCKER|MAJOR|MINOR] <file or task>: <evidence> -> <required fix>
 Evidence checked: files read, commands you ran (read-only git or tests) with exit codes
