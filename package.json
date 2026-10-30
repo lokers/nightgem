@@ -1,6 +1,6 @@
 {
   "name": "nightgem",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Human-written spec, then an autonomous, budget-capped, sandboxed overnight build driven through a dedicated opencode serve (macOS)",
   "license": "MIT",

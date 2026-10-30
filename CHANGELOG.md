@@ -5,6 +5,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-30
+
+Runs check their own work harder: reviews loop until fixed and fail closed, every success criterion is traced to evidence, risky tasks get their own review, the report flags silenced checks, and a retrospective command turns run friction into fixes.
+
+### Upgrading from 0.2.0
+
+- Update between runs, not during one: `git pull && npm ci` in the clone.
+- Re-run `install` to get `/nightgem-retro` and the updated `/nightgem` command. Commands you edited are left alone unless you pass `--force` (a `.bak` copy is kept).
+- Optional: set `review.maxRounds` (1 to 5, default 2) in your profile. A profile with this key is rejected by 0.2.0, so add it only after updating.
+- Optional: add `"**/CONSTRAINTS.md"` to `deny.editPaths` so runs cannot change a repo's quality bar (see [docs/profile.md](docs/profile.md)).
+- A full review can now take up to `review.maxRounds` fix rounds, so a run may spend a little more of its budget on review than in 0.2.0.
+- Runs and `RUN.json` files from 0.2.0 keep working. A resumed 0.2.0 run uses the default of 2 rounds.
+
 ### Added
 
 - `/nightgem-retro <slug>`: an interactive retrospective for a finished run. It reads the run's artifacts read-only, groups the friction into findings with evidence, classifies each fix (profile, instructions file, a repo's docs, nightgem), applies profile and instructions diffs only after you approve them, drafts (never files) issue text for nightgem, and writes `RETRO.md`. `install` installs it with the other commands (re-run `install` to get it) (#15)
@@ -18,6 +31,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - The full review phase no longer stops after one fix-up round: it runs up to `review.maxRounds` rounds (default 2). The soft-stop review still never fixes anything (#11)
+
+### Known limitations
+
+- The suppression scan is a heuristic over the diff: it can miss a check silenced in another way, and it never fails the run.
+- Runs still have no browser or dev server: UI criteria land in `MANUAL_CHECKS.md` for a human.
+- Unchanged from 0.2.0: some harmless commands that only mention a denied tool are refused (#10); the guard checks each command on its own; bash and `sh` heredocs need a writable working directory; tested only against OpenCode 2.0.29 and oh-my-opencode-slim 3.x, macOS only.
 
 ## [0.2.0] - 2026-10-24
 
@@ -98,6 +117,7 @@ First public release. Experimental: macOS only, run from a clone (not published 
 - Attaching OpenCode.app to a running job to watch it live is untested.
 - Shell heredocs fail inside the sandbox (they cannot create their temp file), so agents fall back to the file-write tool.
 
-[Unreleased]: https://github.com/lokers/nightgem/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lokers/nightgem/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/lokers/nightgem/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/lokers/nightgem/releases/tag/v0.2.0
 [0.1.0]: https://github.com/lokers/nightgem/releases/tag/v0.1.0

@@ -18,7 +18,7 @@ In the morning you find verified **local** branches and a `REPORT.md`. Nothing i
 nightgem needs [OpenCode](https://opencode.ai) with [oh-my-opencode-slim](https://github.com/alvinunreal/oh-my-opencode-slim) 3.x, and macOS.
 
 > [!WARNING]
-> **Experimental (0.2.0).** It runs an AI agent unattended on your machine. Read the [disclaimer](#disclaimer) and the [safety model](docs/safety-model.md) first.
+> **Experimental (0.2.1).** It runs an AI agent unattended on your machine. Read the [disclaimer](#disclaimer) and the [safety model](docs/safety-model.md) first.
 
 ## 5-minute quickstart
 
