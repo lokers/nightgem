@@ -131,7 +131,7 @@ Runs have no browser or dev server, on purpose, so some success criteria can onl
 
 1. **Plan.** `PLAN.md` ends with a `## Verification matrix`: one row per success criterion in `SPEC.md`, naming the task(s) that deliver it and either the test or command that proves it or `manual:` followed by exact steps. @oracle's plan review answers `REVISE` when a criterion has no row or a row has no proof.
 2. **Review.** @oracle's final review reports each criterion as `met`, `unmet` or `manual`. The review phase (and the soft-stop review-lite) then writes `MANUAL_CHECKS.md` in the specs dir: a `- [ ]` checklist of the `manual:` rows, the criteria reported `manual` or `unmet`, and anything the review could not verify.
-3. **Report.** `REPORT.md` copies the checklist under `## Verify by hand`, or says `None listed.`. A missing `MANUAL_CHECKS.md` is noted, since a run that ended early may not have written it.
+3. **Report.** `REPORT.md` copies the open checklist items under `## Verify by hand` (items the file marks `- [x]` are listed separately as done), or says `None listed.` when the file says there is nothing to check. A missing `MANUAL_CHECKS.md` is reported as unknown, not as none, since a run that ended early may not have written it.
 
 ## Suppressions and skipped tests
 

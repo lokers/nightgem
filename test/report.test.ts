@@ -696,9 +696,14 @@ describe('buildReport: verify by hand', () => {
       ].join('\n'),
     );
     const p = part(md);
-    expect(p).toContain('- [ ] Saving a draft shows a toast\n  1. Open /drafts\n  2. Click Save\n- [x] Export works for an empty list');
+    expect(p).toContain('- [ ] Saving a draft shows a toast\n  1. Open /drafts\n  2. Click Save');
     expect(p).not.toContain('Some prose');
     expect(p).not.toContain('None listed.');
+    // an item the file marks done is not listed among the ones that still need a human
+    const open = p.slice(0, p.indexOf('Marked done in the file'));
+    expect(open).toContain('Saving a draft shows a toast');
+    expect(open).not.toContain('Export works for an empty list');
+    expect(p).toContain('Marked done in the file:\n\n- [x] Export works for an empty list');
     expect(p).toMatch(/MANUAL_CHECKS\.md\]\(.+MANUAL_CHECKS\.md\)/);
   });
 
@@ -708,10 +713,50 @@ describe('buildReport: verify by hand', () => {
     }
   });
 
-  it('says "None listed." and that the file was not written when MANUAL_CHECKS.md is missing', async () => {
+  it('says it is unknown, not "None listed.", when MANUAL_CHECKS.md is missing', async () => {
     const p = part(await withManual(null));
-    expect(p).toContain('None listed.');
-    expect(p).toContain('MANUAL_CHECKS.md` was not found');
+    expect(p).not.toContain('None listed.');
+    expect(p).toContain('Unknown: `MANUAL_CHECKS.md` is missing');
+    expect(p).toContain('SPEC.md');
+  });
+
+  it('only done items: nothing is open, and they are listed as done', async () => {
+    const p = part(await withManual('- [x] Export works\n'));
+    expect(p).toContain('Nothing is left open.');
+    expect(p).toContain('Marked done in the file:\n\n- [x] Export works');
+    expect(p).not.toContain('were not checked');
+  });
+
+  it('keeps a fenced block with a blank line inside an item, and closes a fence the file left open', () => {
+    expect(extractManualChecks('- [ ] run it\n  ```sh\n  one\n\n  two\n  ```\n  then look\n')).toEqual([
+      '- [ ] run it',
+      '  ```sh',
+      '  one',
+      '',
+      '  two',
+      '  ```',
+      '  then look',
+    ]);
+    expect(extractManualChecks('- [ ] run it\n  ```sh\n  one\n\n  two\n')).toEqual(['- [ ] run it', '  ```sh', '  one', '', '  two', '  ```']);
+    // an unindented line ends an item whose fence is open
+    expect(extractManualChecks('- [ ] a\n  ```\n  x\n## Narrative\ntext\n')).toEqual(['- [ ] a', '  ```', '  x', '  ```']);
+  });
+
+  it('a blank line between steps does not cut an item short', () => {
+    expect(extractManualChecks('- [ ] a\n  1. one\n\n  2. two\n\n- [ ] b\n')).toEqual(['- [ ] a', '  1. one', '', '  2. two', '- [ ] b']);
+  });
+
+  it('a checklist with an unbalanced fence cannot make the next report lose the agent narrative', async () => {
+    const dir = await tmp();
+    await cp(join(FIXTURES, 'completed'), dir, { recursive: true });
+    await writeFile(join(dir, 'MANUAL_CHECKS.md'), '- [ ] run it\n  ```sh\n  one\n\n  two\n');
+    const paths = pathsFor(dir);
+    const first = await writeReport({ paths, git: fakeGit(cleanRepos()) });
+    const second = await writeReport({ paths, git: fakeGit(cleanRepos()) });
+    expect(first).toContain('The API landed first; the UI followed.');
+    expect(second).toBe(first);
+    expect(extractNarrative(second)).toContain('Pagination is untested.');
+    expect(extractNarrative(second)).toBe(extractNarrative(first));
   });
 
   it('points at the file when it has content but no checklist items', async () => {

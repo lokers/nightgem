@@ -508,36 +508,84 @@ async function integrationSection(ctx: Ctx): Promise<string[]> {
   return out;
 }
 
+const CHECK_ITEM_RE = /^(\s*)[-*] \[([ xX])\]/;
+const FENCE_RE = /^(\s*)(`{3,}|~{3,})/;
+
+interface ManualCheck {
+  done: boolean;
+  /** The item line and its continuation lines, verbatim (blank lines inside an item are kept). */
+  lines: string[];
+}
+
 /**
- * The checklist items of MANUAL_CHECKS.md: every `- [ ]` / `- [x]` (or `*`) line, with the indented lines that follow it
- * (the steps), verbatim. Other lines (title, prose) are not copied.
+ * The checklist items of MANUAL_CHECKS.md: every `- [ ]` / `- [x]` (or `*`) line with the indented lines that follow it
+ * (the steps), verbatim. A blank line stays in the item when the next non-blank line is still indented, or when a fenced
+ * block is open (a fence the file never closes is closed here, and an unindented line ends the item), so an item can
+ * never leave an open fence behind in the report. Other lines (title, prose) are not copied.
  */
-export function extractManualChecks(markdown: string): string[] {
-  const out: string[] = [];
-  let inItem = false;
-  for (const line of markdown.split('\n')) {
-    if (/^\s*[-*] \[[ xX]\]/.test(line)) {
-      out.push(line.trimEnd());
-      inItem = true;
-    } else if (inItem && /^\s+\S/.test(line)) {
-      out.push(line.trimEnd());
-    } else {
-      inItem = false;
+function parseManualChecks(markdown: string): ManualCheck[] {
+  const items: ManualCheck[] = [];
+  let cur: ManualCheck | null = null;
+  let fence: { indent: string; marker: string } | null = null;
+  let blanks: string[] = [];
+  const end = (): void => {
+    if (cur && fence) cur.lines.push(`${fence.indent}${fence.marker}`);
+    cur = null;
+    fence = null;
+    blanks = [];
+  };
+  for (const raw of markdown.split('\n')) {
+    const line = raw.trimEnd();
+    const start = CHECK_ITEM_RE.exec(line);
+    if (start) {
+      end();
+      cur = { done: start[2] !== ' ', lines: [line] };
+      items.push(cur);
+      continue;
+    }
+    if (!cur) continue;
+    if (line === '') {
+      blanks.push(line);
+      continue;
+    }
+    if (!/^\s/.test(line)) {
+      end();
+      continue;
+    }
+    cur.lines.push(...blanks, line);
+    blanks = [];
+    const f = FENCE_RE.exec(line);
+    if (f) {
+      const marker = f[2] as string;
+      if (!fence) fence = { indent: f[1] as string, marker };
+      else if (marker[0] === fence.marker[0] && marker.length >= fence.marker.length) fence = null;
     }
   }
-  return out;
+  end();
+  return items;
+}
+
+/** The lines of every checklist item of MANUAL_CHECKS.md (see `parseManualChecks`). */
+export function extractManualChecks(markdown: string): string[] {
+  return parseManualChecks(markdown).flatMap((i) => i.lines);
 }
 
 function verifyByHandSection(ctx: Ctx): string[] {
   const out: string[] = ['## Verify by hand', ''];
   const { path, text } = ctx.manualChecks;
   if (text === null) {
-    out.push('None listed.', '', `> \`${MANUAL_CHECKS_FILE}\` was not found: the review phase did not write it, so checks that need a human may be missing.`);
+    out.push(
+      `Unknown: \`${MANUAL_CHECKS_FILE}\` is missing (the review phase did not write it), so checks that need a human may exist. Go through the success criteria in \`SPEC.md\` by hand.`,
+    );
     return out;
   }
-  const items = extractManualChecks(text);
+  const items = parseManualChecks(text);
   if (items.length > 0) {
-    out.push(`From [${MANUAL_CHECKS_FILE}](${path}). Runs have no browser or dev server, so these were not checked:`, '', ...items);
+    const open = items.filter((i) => !i.done);
+    const done = items.filter((i) => i.done);
+    if (open.length > 0) out.push(`From [${MANUAL_CHECKS_FILE}](${path}). Runs have no browser or dev server, so these were not checked:`, '', ...open.flatMap((i) => i.lines));
+    else out.push(`From [${MANUAL_CHECKS_FILE}](${path}). Nothing is left open.`);
+    if (done.length > 0) out.push('', 'Marked done in the file:', '', ...done.flatMap((i) => i.lines));
     return out;
   }
   const body = text

@@ -67,9 +67,7 @@ Summary: 3 done
 
 ## Verify by hand
 
-None listed.
-
-> `MANUAL_CHECKS.md` was not found: the review phase did not write it, so checks that need a human may be missing.
+Unknown: `MANUAL_CHECKS.md` is missing (the review phase did not write it), so checks that need a human may exist. Go through the success criteria in `SPEC.md` by hand.
 
 ## Safety checks
 
