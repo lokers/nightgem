@@ -29,6 +29,7 @@ import {
   commitsBetween,
   currentBranch,
   defaultGit,
+  diffBetween,
   headSha,
   porcelainHash,
   stashCount,
@@ -36,6 +37,7 @@ import {
   type RemoteBranchState,
 } from './gitinfo.ts';
 import type { RunPaths } from './paths.ts';
+import { scanDiff, type SuppressionHit } from './suppressions.ts';
 
 export const NARRATIVE_PLACEHOLDER = '(no narrative: run ended before report phase)';
 const NARRATIVE_HEADING = '## Narrative';
@@ -228,6 +230,18 @@ interface Ctx {
   repoByName: Map<string, RepoEntry>;
   /** Push-check results, computed once before the sections are rendered. */
   pushChecks: PushCheck[];
+  /** Suppression scan of each integration branch, computed once before the sections are rendered. */
+  suppressionScans: SuppressionScan[];
+}
+
+interface SuppressionScan {
+  repo: string;
+  branch: string;
+  /** The ref the diff was taken against; unset when no base is known. */
+  base?: string;
+  /** `null` = the diff could not be read (see `reason`). */
+  hits: SuppressionHit[] | null;
+  reason?: string;
 }
 
 interface EarlierReview {
@@ -431,20 +445,33 @@ async function tasksSection(ctx: Ctx): Promise<string[]> {
   return out;
 }
 
-async function integrationSection(ctx: Ctx): Promise<string[]> {
-  const out: string[] = ['## Integration branches', ''];
+interface IntegrationTarget {
+  name: string;
+  branch?: string;
+  worktree?: string;
+  event?: TaskEventT;
+}
+
+/** One entry per repo with an integration branch, from the manifest worktrees and the `integration:<repo>` events. */
+function integrationTargets(ctx: Ctx): IntegrationTarget[] {
   const m = ctx.manifest;
   const names = new Set<string>(ctx.integrations.keys());
   for (const w of m?.worktrees ?? []) if (w.kind === 'integration') names.add(w.repo);
-  if (names.size === 0) {
+  return [...names].map((name) => {
+    const wt = m?.worktrees.find((w) => w.kind === 'integration' && w.repo === name);
+    const event = ctx.integrations.get(name);
+    return { name, branch: wt?.branch ?? event?.branch, worktree: wt?.path ?? event?.worktree, event };
+  });
+}
+
+async function integrationSection(ctx: Ctx): Promise<string[]> {
+  const out: string[] = ['## Integration branches', ''];
+  const targets = integrationTargets(ctx);
+  if (targets.length === 0) {
     out.push('(no integration branches)');
     return out;
   }
-  for (const name of names) {
-    const wt = m?.worktrees.find((w) => w.kind === 'integration' && w.repo === name);
-    const ev = ctx.integrations.get(name);
-    const branch = wt?.branch ?? ev?.branch;
-    const worktree = wt?.path ?? ev?.worktree;
+  for (const { name, branch, worktree, event: ev } of targets) {
     out.push(`### ${name}`, '');
     out.push(`- Branch: ${branch ? code(branch) : 'unknown'}`);
     out.push(`- Worktree: ${worktree ? code(worktree) : 'unknown'}`);
@@ -481,7 +508,8 @@ function attentionSection(ctx: Ctx): string[] {
   const defects = ctx.manifest?.defects ?? [];
   const blocked = [...ctx.tasks, ...ctx.integrations.values()].filter((t) => t.state === 'blocked');
   const unverified = ctx.pushChecks.filter((c) => c.state === 'unknown' || c.state === 'no-repo');
-  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0) {
+  const withHits = ctx.suppressionScans.filter((s) => s.hits !== null && s.hits.length > 0);
+  if (flagged.length === 0 && defects.length === 0 && blocked.length === 0 && unverified.length === 0 && withHits.length === 0) {
     out.push('Nothing flagged.');
     return out;
   }
@@ -508,6 +536,12 @@ function attentionSection(ctx: Ctx): string[] {
     for (const c of unverified) {
       out.push(`- ${c.repo} ${code(c.branch)}: ${c.state === 'no-repo' ? 'no repo path known' : `unknown (${c.reason ?? 'no reason'})`}`);
     }
+    out.push('');
+  }
+  if (withHits.length > 0) {
+    out.push('### Suppressions and skipped tests', '');
+    out.push('Check these before trusting that the tests prove the change (details under "Safety checks"):', '');
+    for (const s of withHits) out.push(`- ${s.repo} ${code(s.branch)}: ${s.hits?.length ?? 0} hit(s)`);
     out.push('');
   }
   if (defects.length > 0) {
@@ -605,6 +639,8 @@ async function safetySection(ctx: Ctx): Promise<string[]> {
       for (const u of unknowns) out.push(`  - ${u}`);
     }
   }
+
+  out.push('', ...suppressionSection(ctx));
   return out;
 }
 
@@ -618,6 +654,67 @@ async function reviewBase(ctx: Ctx, repoName: string): Promise<string | undefine
   } catch {
     return repo.defaultBranch;
   }
+}
+
+/** Hits listed per integration branch before the rest is summarised. */
+const MAX_LISTED_HITS = 30;
+
+async function scanSuppressions(ctx: Ctx): Promise<SuppressionScan[]> {
+  const out: SuppressionScan[] = [];
+  for (const t of integrationTargets(ctx)) {
+    const branch = t.branch ?? '(unknown branch)';
+    if (!t.worktree) {
+      out.push({ repo: t.name, branch, hits: null, reason: 'no worktree recorded' });
+      continue;
+    }
+    const base = await reviewBase(ctx, t.name);
+    if (!base) {
+      out.push({ repo: t.name, branch, hits: null, reason: `repo "${t.name}" is not in the manifest, cannot pick a base branch` });
+      continue;
+    }
+    try {
+      out.push({ repo: t.name, branch, base, hits: scanDiff(await diffBetween(t.worktree, base, ctx.git)) });
+    } catch (err) {
+      out.push({ repo: t.name, branch, base, hits: null, reason: errMsg(err) });
+    }
+  }
+  return out;
+}
+
+function hitLine(h: SuppressionHit): string {
+  switch (h.kind) {
+    case 'suppression':
+      return `- ${code(`${h.file}:${h.line}`)}: ${code(h.pattern)} added`;
+    case 'deleted-test':
+      return `- ${code(h.file)}: test file deleted`;
+    case 'assertion-loss':
+      return `- ${code(h.file)}: net loss of assertions (${h.removed} removed, ${h.added} added)`;
+  }
+}
+
+function suppressionSection(ctx: Ctx): string[] {
+  const out: string[] = ['### Suppressions and skipped tests', ''];
+  out.push(
+    'Added lint or type suppressions and test skips, deleted test files and test files with fewer assertions, found in the diff of each integration branch against its base. A heuristic for the reviewer: it never fails the run.',
+    '',
+  );
+  if (ctx.suppressionScans.length === 0) {
+    out.push('(no integration branches to scan)');
+    return out;
+  }
+  for (const s of ctx.suppressionScans) {
+    const label = `${s.repo} ${code(s.branch)}`;
+    if (s.hits === null) {
+      out.push(`- ⚠️ ${label}: not scanned (${s.reason ?? 'could not read the diff'})`);
+    } else if (s.hits.length === 0) {
+      out.push(`- ✅ ${label}: none found (against ${code(s.base ?? '')})`);
+    } else {
+      out.push(`- ⚠️ ${label}: ${s.hits.length} hit(s) (against ${code(s.base ?? '')})`);
+      for (const h of s.hits.slice(0, MAX_LISTED_HITS)) out.push(`  ${hitLine(h)}`);
+      if (s.hits.length > MAX_LISTED_HITS) out.push(`  - … and ${s.hits.length - MAX_LISTED_HITS} more`);
+    }
+  }
+  return out;
 }
 
 async function nextStepsSection(ctx: Ctx): Promise<string[]> {
@@ -694,8 +791,10 @@ export async function buildReport(input: BuildReportInput): Promise<string> {
     git,
     repoByName: new Map((manifest?.repos ?? []).map((r) => [r.name, r])),
     pushChecks: [],
+    suppressionScans: [],
   };
   ctx.pushChecks = await checkPushed(ctx);
+  ctx.suppressionScans = await scanSuppressions(ctx);
 
   const skipped = tasksRead.skipped + decisionsRead.skipped + costRead.skipped;
   const narrative = extractNarrative(existing);

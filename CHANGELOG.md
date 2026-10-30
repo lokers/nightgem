@@ -5,6 +5,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- `REPORT.md` flags added suppressions and skipped tests, deleted test files and test files with fewer assertions, found in the diff of each integration branch, under a new `### Suppressions and skipped tests` check in "Safety checks" and a pointer in "Needs human attention". It is a deterministic heuristic and never fails the run (#14)
+
 ## [0.2.0] - 2026-10-24
 
 Runs stop fighting the sandbox, a smoother first run, and resumable runs.

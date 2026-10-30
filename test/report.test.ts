@@ -57,6 +57,8 @@ interface FakeRepo {
   remote?: string[] | null;
   /** `<base>..HEAD` results keyed by base. A missing key makes git fail. */
   log?: Record<string, string[]>;
+  /** `git diff -U0 <base>...HEAD` output keyed by base. A missing key makes git fail. */
+  diff?: Record<string, string>;
   /** Default-branch names that exist as `refs/remotes/origin/<name>`. */
   originRefs?: string[];
   /** Make ls-remote fail with this message (timeout, network error). */
@@ -100,6 +102,12 @@ function fakeGit(repos: Record<string, FakeRepo>): GitRunner & { calls: string[]
         if (!lines) throw new Error(`fatal: bad revision '${range}'`);
         return lines.join('\n');
       }
+      case 'diff': {
+        const range = rest[rest.length - 1] ?? '';
+        const text = r.diff?.[range.replace(/\.\.\.HEAD$/, '')];
+        if (text === undefined) throw new Error(`fatal: bad revision '${range}'`);
+        return text;
+      }
       default:
         throw new Error(`unexpected git ${args.join(' ')}`);
     }
@@ -121,7 +129,7 @@ function cleanRepos(): Record<string, FakeRepo> {
     [ACME_WEB]: { head: 'b'.repeat(40), branch: 'feature-x', status: '', stash: [], remote: [] },
     [API_WT]: { log: { master: ['1111111 feat: Add endpoint', '2222222 test: Cover endpoint'] } },
     [UI_WT]: { log: { master: ['3333333 feat: Add page'] } },
-    [INT_WT]: { log: { master: ['4444444 merge: api', '1111111 feat: Add endpoint'] } },
+    [INT_WT]: { log: { master: ['4444444 merge: api', '1111111 feat: Add endpoint'] }, diff: { master: '' } },
     [FIX_WT]: { log: { master: ['6666666 fix: Address review'] } },
   };
 }
@@ -508,6 +516,86 @@ describe('buildReport: safety checks', () => {
     const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
     const attention = md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
     expect(attention).not.toContain('Unverified');
+  });
+});
+
+// --- suppressions and skipped tests ----------------------------------------------
+
+describe('buildReport: suppressions and skipped tests', () => {
+  const PATCH = [
+    'diff --git a/src/page.ts b/src/page.ts',
+    '--- a/src/page.ts',
+    '+++ b/src/page.ts',
+    '@@ -7,0 +8 @@',
+    '+// @ts-ignore',
+    'diff --git a/src/page.test.ts b/src/page.test.ts',
+    'deleted file mode 100644',
+    '--- a/src/page.test.ts',
+    '+++ /dev/null',
+    '@@ -1 +0,0 @@',
+    '-expect(page()).toBe(1);',
+    'diff --git a/src/api.test.ts b/src/api.test.ts',
+    '--- a/src/api.test.ts',
+    '+++ b/src/api.test.ts',
+    '@@ -3,2 +3,0 @@',
+    '-expect(a()).toBe(1);',
+    '-expect(b()).toBe(2);',
+    '',
+  ].join('\n');
+  const attentionOf = (md: string): string => md.slice(md.indexOf('## Needs human attention'), md.indexOf('## Safety checks'));
+  const safetyOf = (md: string): string => md.slice(md.indexOf('### Suppressions and skipped tests'), md.indexOf('## Narrative'));
+
+  it('a clean integration branch is listed as none found and adds nothing to Needs human attention', async () => {
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(cleanRepos()) });
+    expect(sections(md)).toContain('Safety checks');
+    expect(safetyOf(md)).toContain('- ✅ acme-api `feat/demo-feature-integration`: none found (against `master`)');
+    expect(attentionOf(md)).not.toContain('Suppressions');
+    expect(md).not.toContain('❌');
+  });
+
+  it('lists every hit with file and line, flags it under Needs human attention, and does not fail the report', async () => {
+    const repos = cleanRepos();
+    repos[INT_WT] = { ...repos[INT_WT], diff: { master: PATCH } };
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
+    const part = safetyOf(md);
+    expect(part).toContain('- ⚠️ acme-api `feat/demo-feature-integration`: 3 hit(s) (against `master`)');
+    expect(part).toContain('  - `src/page.ts:8`: `@ts-ignore` added');
+    expect(part).toContain('  - `src/page.test.ts`: test file deleted');
+    expect(part).toContain('  - `src/api.test.ts`: net loss of assertions (2 removed, 0 added)');
+    const attention = attentionOf(md);
+    expect(attention).toContain('### Suppressions and skipped tests');
+    expect(attention).toContain('- acme-api `feat/demo-feature-integration`: 3 hit(s)');
+    expect(attention).not.toContain('Nothing flagged');
+    expect(md).not.toContain('❌');
+  });
+
+  it('diffs against origin/<default> when that ref exists, and caps a long list', async () => {
+    const repos = cleanRepos();
+    repos[ACME_API] = { ...repos[ACME_API], originRefs: ['master'] };
+    const many = ['diff --git a/s.ts b/s.ts', '--- a/s.ts', '+++ b/s.ts', '@@ -0,0 +1,35 @@', ...Array.from({ length: 35 }, () => '+// @ts-ignore'), ''].join('\n');
+    repos[INT_WT] = { ...repos[INT_WT], log: { 'origin/master': [] }, diff: { 'origin/master': many } };
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
+    const part = safetyOf(md);
+    expect(part).toContain('35 hit(s) (against `origin/master`)');
+    expect(part).toContain('  - `s.ts:30`: `@ts-ignore` added');
+    expect(part).not.toContain('`s.ts:31`');
+    expect(part).toContain('  - … and 5 more');
+  });
+
+  it('an unreadable diff is "not scanned", never an error or a pass', async () => {
+    const repos = cleanRepos();
+    repos[INT_WT] = { log: repos[INT_WT]?.log };
+    const md = await buildReport({ paths: fixture('completed'), git: fakeGit(repos) });
+    expect(safetyOf(md)).toContain("- ⚠️ acme-api `feat/demo-feature-integration`: not scanned (fatal: bad revision 'master...HEAD')");
+    expect(safetyOf(md)).not.toContain('none found');
+    expect(attentionOf(md)).not.toContain('Suppressions');
+  });
+
+  it('is read-only: the scan only runs git diff in the integration worktree', async () => {
+    const git = fakeGit(cleanRepos());
+    await buildReport({ paths: fixture('completed'), git });
+    const diffs = git.calls.filter((c) => c.includes(' :: diff '));
+    expect(diffs).toEqual([`${INT_WT} :: diff -U0 -M --no-color master...HEAD`]);
   });
 });
 

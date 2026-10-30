@@ -74,6 +74,12 @@ Never started (skipped): metrics
 
 - ✅ acme-api (`/fake/acme-api`): HEAD, branch, status and stashes match baseline
 
+### Suppressions and skipped tests
+
+Added lint or type suppressions and test skips, deleted test files and test files with fewer assertions, found in the diff of each integration branch against its base. A heuristic for the reviewer: it never fails the run.
+
+(no integration branches to scan)
+
 ## Narrative
 
 (no narrative: run ended before report phase)

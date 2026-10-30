@@ -93,7 +93,7 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `PLAN.md` | Plan written in the plan phase, reviewed by @oracle |
 | `STATUS.md` | Live task table, updated on every state change |
 | `DECISIONS.md` | Every agent decision, with @oracle verdicts for risky ones |
-| `REPORT.md` | Final report: outcome, attempts of a resumed run, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. |
+| `REPORT.md` | Final report: outcome, attempts of a resumed run, per-task branch, worktree, commits, verification exits, oracle verdict, BLOCKED reasons, "Needs human attention", cost per phase. "Nothing was pushed" is tri-state (✅ no, ❌ yes, ⚠️ unknown), and unknown is listed under Needs human attention. See [Suppressions and skipped tests](#suppressions-and-skipped-tests). |
 | `FINAL_REVIEW.md` | The oracle's final review. After a resume the earlier ones are kept as `FINAL_REVIEW-attempt<n>.md` (and `.run/run-complete-attempt<n>.json`) |
 | `.run/RUN.json` | State, phase, cost total, attempts, session ids, PID, port, server URL, profile and skills summary (zod-validated) |
 | `.run/cost.jsonl` | Cost ledger lines (`session-info` or `estimate`) |
@@ -105,6 +105,15 @@ All under `<workspaceRoot>/.specs/<slug>/` unless noted.
 | `~/Library/Application Support/nightgem/<slug>/` | Password file, heartbeat, control flags, `run-context.json`, launchd plist and logs (0700) |
 | `~/Library/Application Support/nightgem/<slug>/xdg-data/` | The run's own OpenCode database (isolated `XDG_DATA_HOME`) |
 | `<repo>/.worktrees/<slug>/<task>` and `/_integration` | Task and integration worktrees on local branches |
+
+## Suppressions and skipped tests
+
+The never-list forbids weakening, skipping or deleting tests, and @oracle is asked to check it. `REPORT.md` also checks it without a model: under `## Safety checks`, `### Suppressions and skipped tests` scans `git diff -U0 <base>...HEAD` of each integration branch (the base is `origin/<default>` when that ref exists, else the local default) and lists, with file and line:
+
+- **added** suppressions and skips: `eslint-disable`, `@ts-ignore`, `@ts-expect-error`, `@ts-nocheck`, `.skip(`, `.only(`, `xit(`, `xdescribe(`, `t.Skip(`, `//nolint`, `# noqa`, `# type: ignore`, `@Disabled`, `@Ignore`, `pytest.mark.skip` (documentation files such as `.md` are not scanned);
+- **deleted test files**, and test files with a **net loss of assertions** (`expect(` or `assert…` lines removed minus added).
+
+A branch with hits gets ⚠️ and a pointer under "Needs human attention". The check is a heuristic that informs you: it never fails the run, a diff that cannot be read is shown as "not scanned", and a deliberate, justified suppression shows up too, so read each hit before you act on it.
 
 ## Desktop app (OpenCode.app)
 

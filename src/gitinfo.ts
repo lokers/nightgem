@@ -34,6 +34,14 @@ export async function commitsBetween(worktree: string, base: string, git: GitRun
   return lines(await git(['log', '--oneline', `${base}..HEAD`], { cwd: worktree }));
 }
 
+/**
+ * The patch of `<base>...HEAD` with no context lines (`-U0`), as the suppression scan reads it. Renames are detected
+ * explicitly so a moved test file is not read as a deleted one. Throws on a git failure.
+ */
+export async function diffBetween(worktree: string, base: string, git: GitRunner = defaultGit): Promise<string> {
+  return git(['diff', '-U0', '-M', '--no-color', `${base}...HEAD`], { cwd: worktree });
+}
+
 /** Current branch name (`HEAD` when detached). */
 export async function currentBranch(repo: string, git: GitRunner = defaultGit): Promise<string> {
   return (await git(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repo })).trim();
